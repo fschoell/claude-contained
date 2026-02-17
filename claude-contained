@@ -353,6 +353,7 @@ container_argv=(
   -e "HOST_UID=$(id -u)"
   -e "HOST_GID=$(id -g)"
   -w "${main_host}"
+  ${AI_GH_TOKEN:+-e "GH_TOKEN=${AI_GH_TOKEN}"}
   --mount "type=bind,src=${HOST_CLAUDE_DIR},dst=${HOST_HOME}/.claude"
   --mount "type=bind,src=${HOST_CODEX_DIR},dst=${HOST_HOME}/.codex"
   --mount "type=bind,src=${HOST_GEMINI_DIR},dst=${HOST_HOME}/.gemini"
