@@ -28,6 +28,9 @@ claude-contained . -- --model sonnet
 
 # Yolo mode (maps to tool-specific flag)
 claude-contained -y -t codex .
+
+# Use container-specific node_modules (skip prompt)
+claude-contained -N .
 ```
 
 ## Architecture
@@ -57,7 +60,7 @@ claude-contained -y -t codex .
 - Entrypoint dynamically adjusts UID/GID to match host user (handles conflicts)
 - Strict bash error handling with `set -euo pipefail`
 - `--` separator distinguishes directory arguments from tool arguments
-- `-t/--tool` flag selects which AI tool to run; `-y/--yolo` maps to tool-specific permission flags
+- `-t/--tool` flag selects which AI tool to run; `-y/--yolo` maps to tool-specific permission flags; `-N/--contained-node-modules` auto-accepts the node_modules overlay prompt
 - Only Claude and Codex support `--add-dir` for extra directories; others just get mounts
 - **Script parity**: `claude-contained` and `claude-docked` should always be updated together when adding/changing flags or behavior to maintain feature parity across both container runtimes
 
@@ -84,4 +87,5 @@ The `devcontainer/` directory provides a VS Code devcontainer configuration for 
 - Multiple simultaneous sessions share `~/.claude` state; concurrent writes may conflict (Claude Code limitation)
 - `~/.claude.json` is relocated to `~/.claude-contained/.claude.json` (with symlink at original location) to work around Apple Containers' inability to bind-mount individual files. Deleting `~/.claude-contained/` will lose credentials.
 - Running `claude-contained` and regular `claude` simultaneously is not recommended (both access same config via different paths)
+- **node_modules overlay**: On macOS hosts, Node.js projects are prompted to create a `node_modules-linux-<arch>/` directory that gets mounted over `node_modules` inside the container (since macOS native binaries don't work on Linux). These directories should be added to `.gitignore` (`node_modules-linux-*/`). Use `-N` to skip the prompt.
 - **Devcontainer limitation**: Don't run VS Code devcontainer and standalone scripts simultaneously on same `~/.claude` directory

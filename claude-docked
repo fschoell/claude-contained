@@ -17,6 +17,7 @@ Options:
   -S, --ssh          Enable SSH agent forwarding (for git push)
   -w, --worktree     Auto-include git worktree's main repository (skip prompt)
   -y, --yolo         Skip all permission prompts (tool-specific flag)
+  -N, --contained-node-modules  Use container-specific node_modules (skip prompt)
   -a, --attach [NAME]  Attach to running container (runs tool, or bash with -s)
   -h, --help         Show this help message
 
@@ -103,6 +104,7 @@ shell_mode=0
 ssh_mode=0
 worktree_mode=0
 yolo_mode=0
+contained_node_modules=0
 attach_mode=0
 attach_name=""
 custom_container_name=""
@@ -125,6 +127,10 @@ while [[ "${1:-}" == -* ]]; do
       ;;
     -y|--yolo)
       yolo_mode=1
+      shift
+      ;;
+    -N|--contained-node-modules)
+      contained_node_modules=1
       shift
       ;;
     -t|--tool)
@@ -259,6 +265,14 @@ done
 if [[ ${#paths[@]} -eq 0 ]]; then
   paths+=(".")
 fi
+
+container_arch() {
+  local arch
+  arch="$(uname -m)"
+  # Normalize macOS arm64 to Linux aarch64
+  [[ "$arch" == "arm64" ]] && arch="aarch64"
+  echo "$arch"
+}
 
 resolve_path() {
   if command -v python3 &>/dev/null; then
@@ -473,6 +487,41 @@ for p in "${paths[@]:1}"; do
   # Only claude and codex support --add-dir
   [[ "$tool" == "claude" || "$tool" == "codex" ]] && tool_argv+=( --add-dir "${hp}" )
 done
+
+# Platform-specific node_modules overlay
+if [[ "$(uname)" != "Linux" ]]; then
+  # Container is Linux; host is not — node_modules may need platform-specific binaries
+  nm_platform="linux-$(container_arch)"
+  nm_check_dirs=("$main_host")
+  for p in "${paths[@]:1}"; do
+    nm_check_dirs+=("$(resolve_path "$p")")
+  done
+
+  nm_overlay_dirs=()
+  for nm_dir in "${nm_check_dirs[@]}"; do
+    [[ -f "${nm_dir}/package.json" ]] && nm_overlay_dirs+=("$nm_dir")
+  done
+
+  if [[ ${#nm_overlay_dirs[@]} -gt 0 ]]; then
+    do_overlay=$contained_node_modules
+    if [[ $do_overlay -eq 0 ]]; then
+      read -p "Node.js project detected. Use container-specific node_modules? [Y/n] " answer
+      [[ "${answer:-Y}" =~ ^[Yy] ]] && do_overlay=1
+    fi
+
+    if [[ $do_overlay -eq 1 ]]; then
+      for nm_dir in "${nm_overlay_dirs[@]}"; do
+        nm_target="${nm_dir}/node_modules-${nm_platform}"
+        mkdir -p "${nm_target}"
+        container_argv+=( --mount "type=bind,src=${nm_target},dst=${nm_dir}/node_modules" )
+        if [[ -z "$(ls -A "${nm_target}" 2>/dev/null)" ]]; then
+          echo "Created ${nm_target}" >&2
+          echo "  Run 'npm install' (or your package manager) inside the container." >&2
+        fi
+      done
+    fi
+  fi
+fi
 
 # Add worktree main repo to agent's folders
 if [[ -n "$worktree_main_repo" ]]; then

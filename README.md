@@ -64,7 +64,10 @@ claude-contained [options] [main_dir] [extra_dir ...] [-- <tool args...>]
 | `-p HOST:CONTAINER` | Publish container port to host (can be repeated) |
 | `-s`, `--shell` | Start a bash shell instead of the AI tool (for debugging) |
 | `-S`, `--ssh` | Enable SSH agent forwarding (for git push) |
+| `-w`, `--worktree` | Auto-include git worktree's main repository (skip prompt) |
 | `-y`, `--yolo` | Skip all permission prompts (tool-specific flag) |
+| `-N`, `--contained-node-modules` | Use container-specific node_modules (skip prompt) |
+| `-a`, `--attach [NAME]` | Attach to running container (runs tool, or bash with `-s`) |
 | `-h`, `--help` | Show help message |
 
 ### Supported Tools
@@ -83,7 +86,8 @@ All config directories are bind-mounted regardless of which tool you run.
 - First directory is the working directory
 - Additional directories are mounted and auto-added via `--add-dir` (Claude and Codex only)
 - Tool configs and Maven cache (`~/.m2`) are bind-mounted for persistence
-- SSH agent is forwarded automatically
+- SSH agent forwarding is disabled by default; use `-S`/`--ssh` to enable
+- Git worktrees are detected; main repository is included for full git access
 
 ### Examples
 
@@ -104,6 +108,51 @@ claude-contained -s                                 # Debug shell
 claude-contained -p 8080:8080 .                     # Expose port 8080
 claude-contained -H 3845 .                          # Forward host:3845 to container
 ```
+
+## Node.js Projects (node_modules Overlay)
+
+When running on macOS, the container is Linux — but `node_modules` often contains platform-specific native binaries (e.g., esbuild, swc, sharp) that are compiled for the host architecture. macOS `arm64` binaries won't work inside a Linux `aarch64` container, even though the CPU architecture is the same, because the OS ABI differs.
+
+To handle this, the scripts automatically detect Node.js projects (directories with a `package.json`) and offer to create a **container-specific `node_modules`** directory:
+
+```
+Node.js project detected. Use container-specific node_modules? [Y/n]
+```
+
+If accepted, a `node_modules-linux-aarch64/` directory (or `node_modules-linux-x86_64` on Intel Macs) is created next to your project and mounted over `node_modules` inside the container. This keeps host and container dependencies separate — each platform gets the correct native binaries.
+
+### First run
+
+After accepting the prompt, run your package manager inside the container to install Linux-native dependencies:
+
+```bash
+npm install    # or yarn, pnpm, bun, etc.
+```
+
+### Subsequent runs
+
+The overlay directory persists on the host, so dependencies survive across container sessions. No re-install needed unless you change `package.json`.
+
+### Skipping the prompt
+
+Use `-N` (or `--contained-node-modules`) to auto-accept without prompting:
+
+```bash
+claude-contained -N .
+```
+
+### .gitignore
+
+Add the overlay directories to your `.gitignore`:
+
+```
+node_modules-linux-*/
+```
+
+### When it's skipped
+
+- **Linux hosts**: No overlay needed — host and container share the same OS, so native binaries are already compatible.
+- **No `package.json`**: No prompt, no overlay.
 
 ## Accessing Host Services
 
