@@ -191,20 +191,14 @@ RUN useradd -m -s /bin/bash dev \
   && mkdir -p /work \
   && chown -R dev:dev /work /home/dev /ms-playwright
 
-# ---- Install SDKMAN! with Java 25 and Maven (as dev user) ------------------
+# ---- Install SDKMAN! with Maven (as dev user) ------------------------------
 USER dev
-# Temporarily unset JAVA_TOOL_OPTIONS — it contains JBR-specific flags
-# (AllowEnhancedClassRedefinition) that Temurin doesn't recognize
 RUN set -eux; \
-    unset JAVA_TOOL_OPTIONS; \
     curl -s "https://get.sdkman.io?rcupdate=false" | bash; \
     echo 'source "/home/dev/.sdkman/bin/sdkman-init.sh"' >> /home/dev/.bashrc; \
-    bash -c 'unset JAVA_TOOL_OPTIONS && source "/home/dev/.sdkman/bin/sdkman-init.sh" && sdk install java 25-tem'; \
-    bash -c 'unset JAVA_TOOL_OPTIONS && source "/home/dev/.sdkman/bin/sdkman-init.sh" && sdk install maven'; \
-    bash -c 'unset JAVA_TOOL_OPTIONS && source "/home/dev/.sdkman/bin/sdkman-init.sh" && sdk default java 25-tem'; \
-    bash -c 'unset JAVA_TOOL_OPTIONS && source "/home/dev/.sdkman/bin/sdkman-init.sh" && java -version'; \
-    bash -c 'unset JAVA_TOOL_OPTIONS && source "/home/dev/.sdkman/bin/sdkman-init.sh" && mvn --version'; \
-    echo "SDKMAN! setup complete - Java 25 and Maven installed"
+    bash -c 'source "/home/dev/.sdkman/bin/sdkman-init.sh" && sdk install maven'; \
+    bash -c 'source "/home/dev/.sdkman/bin/sdkman-init.sh" && mvn --version'; \
+    echo "SDKMAN! setup complete - Maven installed"
 USER root
 
 # ---- Entrypoint (host.local setup + path parity) ---------------------------
@@ -212,9 +206,9 @@ RUN cat <<'EOF' > /usr/local/bin/entrypoint.sh
 #!/bin/bash
 set -e
 
-# Primary JAVA_HOME for hotswap compatibility, but SDKMAN! Java 25 is also available
+# JBR as primary Java (with HotswapAgent support)
 export JAVA_HOME=/opt/jbr
-export PATH="/opt/claude:/home/dev/.sdkman/candidates/java/current/bin:/home/dev/.sdkman/candidates/maven/current/bin:$JAVA_HOME/bin:$PATH"
+export PATH="/opt/claude:/home/dev/.sdkman/candidates/maven/current/bin:$JAVA_HOME/bin:$PATH"
 
 # Add host.local pointing to host machine
 # Docker Desktop (macOS/Windows): use host.docker.internal
