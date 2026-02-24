@@ -23,11 +23,11 @@ RUN set -eux; \
       git openssh-client ca-certificates ripgrep jq \
       curl bash xz-utils unzip \
       python3 python3-pip python3-venv \
-      iproute2 gosu socat maven \
+      iproute2 gosu socat \
       libasound2 libatk-bridge2.0-0 libatk1.0-0 libatspi2.0-0 \
       libcups2 libdbus-1-3 libdrm2 libgbm1 libgtk-3-0 \
       libnspr4 libnss3 libpango-1.0-0 libxcomposite1 libxdamage1 \
-      libxfixes3 libxkbcommon0 libxrandr2 xvfb"; \
+      libxfixes3 libxkbcommon0 libxrandr2 xvfb zip unzip"; \
     \
     # Extract custom packages (non-comment, non-empty lines)
     CUSTOM_PACKAGES=""; \
@@ -191,13 +191,24 @@ RUN useradd -m -s /bin/bash dev \
   && mkdir -p /work \
   && chown -R dev:dev /work /home/dev /ms-playwright
 
+# ---- Install SDKMAN! with Maven (as dev user) ------------------------------
+USER dev
+RUN set -eux; \
+    curl -s "https://get.sdkman.io?rcupdate=false" | bash; \
+    echo 'source "/home/dev/.sdkman/bin/sdkman-init.sh"' >> /home/dev/.bashrc; \
+    bash -c 'source "/home/dev/.sdkman/bin/sdkman-init.sh" && sdk install maven'; \
+    bash -c 'source "/home/dev/.sdkman/bin/sdkman-init.sh" && mvn --version'; \
+    echo "SDKMAN! setup complete - Maven installed"
+USER root
+
 # ---- Entrypoint (host.local setup + path parity) ---------------------------
 RUN cat <<'EOF' > /usr/local/bin/entrypoint.sh
 #!/bin/bash
 set -e
 
+# JBR as primary Java (with HotswapAgent support)
 export JAVA_HOME=/opt/jbr
-export PATH="/opt/claude:$JAVA_HOME/bin:$PATH"
+export PATH="/opt/claude:/home/dev/.sdkman/candidates/maven/current/bin:$JAVA_HOME/bin:$PATH"
 
 # Add host.local pointing to host machine
 # Docker Desktop (macOS/Windows): use host.docker.internal
