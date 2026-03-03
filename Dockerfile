@@ -191,14 +191,16 @@ RUN useradd -m -s /bin/bash dev \
   && mkdir -p /work \
   && chown -R dev:dev /work /home/dev /ms-playwright
 
-# ---- Install SDKMAN! with Maven (as dev user) ------------------------------
+# ---- Install SDKMAN! with Maven + JBang (as dev user) ----------------------
 USER dev
 RUN set -eux; \
     curl -s "https://get.sdkman.io?rcupdate=false" | bash; \
     echo 'source "/home/dev/.sdkman/bin/sdkman-init.sh"' >> /home/dev/.bashrc; \
     bash -c 'source "/home/dev/.sdkman/bin/sdkman-init.sh" && sdk install maven'; \
+    bash -c 'source "/home/dev/.sdkman/bin/sdkman-init.sh" && sdk install jbang'; \
     bash -c 'source "/home/dev/.sdkman/bin/sdkman-init.sh" && mvn --version'; \
-    echo "SDKMAN! setup complete - Maven installed"
+    bash -c 'source "/home/dev/.sdkman/bin/sdkman-init.sh" && jbang version'; \
+    echo "SDKMAN! setup complete - Maven and JBang installed"
 USER root
 
 # ---- Entrypoint (host.local setup + path parity) ---------------------------
@@ -208,7 +210,7 @@ set -e
 
 # JBR as primary Java (with HotswapAgent support)
 export JAVA_HOME=/opt/jbr
-export PATH="/opt/claude:/home/dev/.sdkman/candidates/maven/current/bin:$JAVA_HOME/bin:$PATH"
+export PATH="/opt/claude:/home/dev/.sdkman/candidates/maven/current/bin:/home/dev/.sdkman/candidates/jbang/current/bin:$JAVA_HOME/bin:$PATH"
 
 # Add host.local pointing to host machine
 # Docker Desktop (macOS/Windows): use host.docker.internal
