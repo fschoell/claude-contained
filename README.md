@@ -119,7 +119,7 @@ To handle this, the scripts automatically detect Node.js projects (directories w
 Node.js project detected. Use container-specific node_modules? [Y/n]
 ```
 
-If accepted, a `node_modules-linux-aarch64/` directory (or `node_modules-linux-x86_64` on Intel Macs) is created next to your project and mounted over `node_modules` inside the container. This keeps host and container dependencies separate — each platform gets the correct native binaries.
+If accepted, a `.claude-contained/node_modules-linux-aarch64/` directory (or `node_modules-linux-x86_64` on Intel Macs) is created inside your project and mounted over `node_modules` inside the container. The `.claude-contained/` directory is automatically added to `.gitignore` in git repos, which also tells IDEs (IntelliJ, VS Code) to skip indexing it. This keeps host and container dependencies separate — each platform gets the correct native binaries.
 
 ### First run
 
@@ -143,11 +143,7 @@ claude-contained -N .
 
 ### .gitignore
 
-Add the overlay directories to your `.gitignore`:
-
-```
-node_modules-linux-*/
-```
+Handled automatically — the scripts append `.claude-contained/` to your project's `.gitignore` when creating the overlay (only in git repos).
 
 ### When it's skipped
 

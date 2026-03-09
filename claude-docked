@@ -511,8 +511,14 @@ if [[ "$(uname)" != "Linux" ]]; then
 
     if [[ $do_overlay -eq 1 ]]; then
       for nm_dir in "${nm_overlay_dirs[@]}"; do
-        nm_target="${nm_dir}/node_modules-${nm_platform}"
+        nm_target="${nm_dir}/.claude-contained/node_modules-${nm_platform}"
         mkdir -p "${nm_target}"
+        # Ensure .claude-contained/ is gitignored
+        if [[ -d "${nm_dir}/.git" || -f "${nm_dir}/.git" ]]; then
+          if ! grep -qxF '.claude-contained/' "${nm_dir}/.gitignore" 2>/dev/null; then
+            echo '.claude-contained/' >> "${nm_dir}/.gitignore"
+          fi
+        fi
         container_argv+=( --mount "type=bind,src=${nm_target},dst=${nm_dir}/node_modules" )
         if [[ -z "$(ls -A "${nm_target}" 2>/dev/null)" ]]; then
           echo "Created ${nm_target}" >&2
