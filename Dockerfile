@@ -138,6 +138,7 @@ RUN set -eux; \
 
 # ---- Language Servers + AI CLIs --------------------------------------------
 RUN npm install -g \
+    @github/copilot \
     @google/gemini-cli \
     @openai/codex \
     typescript \
