@@ -173,7 +173,7 @@ fi
 # Handle attach mode
 if [[ $attach_mode -eq 1 ]]; then
   # Get running containers with our prefix
-  prefix="claude-contained-"
+  prefix="aic-"
   containers=()
   while IFS= read -r line; do
     [[ -n "$line" ]] && containers+=("$line")
@@ -182,7 +182,7 @@ if [[ $attach_mode -eq 1 ]]; then
   if [[ -z "$attach_name" ]]; then
     # Interactive mode
     if [[ ${#containers[@]} -eq 0 ]]; then
-      echo "No running claude-contained containers"
+      echo "No running aic containers"
       exit 0
     fi
 
@@ -355,12 +355,19 @@ mkdir -p "${HOST_CLAUDE_DIR}" "${HOST_CODEX_DIR}" "${HOST_COPILOT_DIR}" "${HOST_
 CLAUDE_MEMORY="${CLAUDE_MEMORY:-8g}"
 if [[ -n "$custom_container_name" ]]; then
   container_name="$custom_container_name"
-  echo "Creating named container: ${container_name#claude-contained-}"
+  echo "Creating named container: ${container_name#aic-}"
 else
   container_folder="$(sanitize_foldername "$main_host")"
   container_time="$(date +%H%M)"
-  container_name="claude-contained-${container_folder}-${container_time}"
+  container_name="aic-${container_folder}-${container_time}"
 fi
+# Deduplicate: append -2, -3, ... if a container with the same name already exists
+base_container_name="$container_name"
+suffix=2
+while container list --quiet 2>/dev/null | grep -qx "$container_name"; do
+  container_name="${base_container_name}-${suffix}"
+  ((suffix++))
+done
 container_argv=(
   container run --rm -it
   --memory "${CLAUDE_MEMORY}"

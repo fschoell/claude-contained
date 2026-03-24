@@ -63,6 +63,7 @@ claude-contained -N .
 - `--` separator distinguishes directory arguments from tool arguments
 - `-t/--tool` flag selects which AI tool to run; `-y/--yolo` maps to tool-specific permission flags; `-N/--contained-node-modules` auto-accepts the node_modules overlay prompt
 - Only Claude and Codex support `--add-dir` for extra directories; others just get mounts
+- **Container naming**: Both scripts use the `aic-` prefix for container names. Auto-generated names follow the pattern `aic-{folder}-{HHMM}` (e.g., `aic-my-app-1423`). If a container with that name already exists, a numeric suffix is appended (`aic-my-app-1423-2`, `-3`, etc.). Custom names via `-a` also use the `aic-` prefix.
 - **Script parity**: `claude-contained` and `claude-docked` should always be updated together when adding/changing flags or behavior to maintain feature parity across both container runtimes
 
 ### Devcontainer Support
