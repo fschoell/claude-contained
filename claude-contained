@@ -27,7 +27,7 @@ Behavior:
   - Additional directories are automatically added via --add-dir (claude, codex only).
   - Tool configs (~/.claude, ~/.codex, ~/.gemini, ~/.vibe), Maven cache (~/.m2), and Vaadin state (~/.vaadin) are bind-mounted.
   - SSH agent forwarding is disabled by default; use --ssh to enable (for git push).
-  - Git worktrees are detected; main repository is included for full git access.
+  - Git worktrees are detected; main repository's .git directory is mounted for full git access.
 
 Examples:
   claude-contained                     # Run claude in current directory
@@ -324,11 +324,11 @@ worktree_main_repo="$(get_worktree_main_repo "$main_host")" || true
 if [[ -n "$worktree_main_repo" ]]; then
   if [[ $worktree_mode -eq 1 ]]; then
     # Auto-include mode: just inform the user
-    echo "Worktree detected: also including main repository ${worktree_main_repo}"
+    echo "Worktree detected: mounting ${worktree_main_repo}/.git for full git access"
   else
     # Prompt mode: ask the user
     echo "Working directory is a git worktree linked to: ${worktree_main_repo}"
-    read -p "Include main repository for full git access? [Y/n] " answer
+    read -p "Mount main repository's .git for full git access? [Y/n] " answer
     case "${answer:-Y}" in
       [Yy]* ) : ;;  # Continue, will be included
       * ) worktree_main_repo="" ;;  # Don't include
@@ -377,9 +377,9 @@ container_argv=(
   --mount "type=bind,src=${main_host},dst=${main_host}"
 )
 
-# Mount worktree's main repository if needed
+# Mount worktree's main repository .git directory (not the working tree)
 if [[ -n "$worktree_main_repo" ]]; then
-  container_argv+=( --mount "type=bind,src=${worktree_main_repo},dst=${worktree_main_repo}" )
+  container_argv+=( --mount "type=bind,src=${worktree_main_repo}/.git,dst=${worktree_main_repo}/.git" )
 fi
 
 # Add port mappings
@@ -506,10 +506,7 @@ if [[ "$(uname)" != "Linux" ]]; then
   fi
 fi
 
-# Add worktree main repo to agent's folders
-if [[ -n "$worktree_main_repo" ]]; then
-  [[ "$tool" == "claude" || "$tool" == "codex" ]] && tool_argv+=( --add-dir "${worktree_main_repo}" )
-fi
+# Note: worktree main repo is NOT added via --add-dir since only .git is mounted (no working tree)
 
 # Append user's tool args
 if [[ ${#tool_args[@]} -gt 0 ]]; then
