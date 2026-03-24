@@ -10,7 +10,7 @@ Description:
   Runs AI coding assistants inside an Apple Containers sandbox.
 
 Options:
-  -t, --tool TOOL    AI tool to run: claude (default), codex, gemini, vibe
+  -t, --tool TOOL    AI tool to run: claude (default), codex, copilot, gemini, vibe
   -H PORT[:HOSTPORT] Forward host port to container localhost (can be repeated)
   -p HOST:CONTAINER  Publish container port to host (can be repeated)
   -s, --shell        Start a bash shell instead of the AI tool (for debugging)
@@ -25,13 +25,14 @@ Behavior:
   - If no directories are provided, defaults to the current directory.
   - Directories are mounted at their original host paths for full path parity.
   - Additional directories are automatically added via --add-dir (claude, codex only).
-  - Tool configs (~/.claude, ~/.codex, ~/.gemini, ~/.vibe), Maven cache (~/.m2), and Vaadin state (~/.vaadin) are bind-mounted.
+  - Tool configs (~/.claude, ~/.codex, ~/.copilot, ~/.gemini, ~/.vibe), Maven cache (~/.m2), and Vaadin state (~/.vaadin) are bind-mounted.
   - SSH agent forwarding is disabled by default; use --ssh to enable (for git push).
   - Git worktrees are detected; main repository's .git directory is mounted for full git access.
 
 Examples:
   claude-contained                     # Run claude in current directory
   claude-contained -t codex .          # Run codex instead
+  claude-contained -t copilot .        # Run copilot instead
   claude-contained -t gemini .         # Run gemini instead
   claude-contained -t vibe .           # Run vibe instead
   claude-contained . ../other/project  # Mount extra directories
@@ -80,7 +81,7 @@ build_attach_cmd() {
   if [[ $yolo_mode -eq 1 ]]; then
     case "$tool" in
       claude) attach_cmd+=(--dangerously-skip-permissions) ;;
-      codex|gemini) attach_cmd+=(--yolo) ;;
+      codex|copilot|gemini) attach_cmd+=(--yolo) ;;
       vibe) echo "Warning: vibe does not support yolo mode" >&2 ;;
     esac
   fi
@@ -341,13 +342,14 @@ HOST_HOME="$HOME"
 HOST_CLAUDE_DIR="${HOST_HOME}/.claude"
 HOST_CODEX_DIR="${HOST_HOME}/.codex"
 HOST_GEMINI_DIR="${HOST_HOME}/.gemini"
+HOST_COPILOT_DIR="${HOST_HOME}/.copilot"
 HOST_VIBE_DIR="${HOST_HOME}/.vibe"
 HOST_M2_DIR="${HOST_HOME}/.m2"
 HOST_VAADIN_DIR="${HOST_HOME}/.vaadin"
 HOST_GITCONFIG="${HOST_HOME}/.gitconfig"
 
 # Ensure persistent directories exist on host
-mkdir -p "${HOST_CLAUDE_DIR}" "${HOST_CODEX_DIR}" "${HOST_GEMINI_DIR}" "${HOST_VIBE_DIR}" "${HOST_M2_DIR}" "${HOST_VAADIN_DIR}"
+mkdir -p "${HOST_CLAUDE_DIR}" "${HOST_CODEX_DIR}" "${HOST_COPILOT_DIR}" "${HOST_GEMINI_DIR}" "${HOST_VIBE_DIR}" "${HOST_M2_DIR}" "${HOST_VAADIN_DIR}"
 
 # Build container args
 CLAUDE_MEMORY="${CLAUDE_MEMORY:-8g}"
@@ -370,6 +372,7 @@ container_argv=(
   ${AI_GH_TOKEN:+-e "GH_TOKEN=${AI_GH_TOKEN}"}
   --mount "type=bind,src=${HOST_CLAUDE_DIR},dst=${HOST_HOME}/.claude"
   --mount "type=bind,src=${HOST_CODEX_DIR},dst=${HOST_HOME}/.codex"
+  --mount "type=bind,src=${HOST_COPILOT_DIR},dst=${HOST_HOME}/.copilot"
   --mount "type=bind,src=${HOST_GEMINI_DIR},dst=${HOST_HOME}/.gemini"
   --mount "type=bind,src=${HOST_VIBE_DIR},dst=${HOST_HOME}/.vibe"
   --mount "type=bind,src=${HOST_M2_DIR},dst=${HOST_HOME}/.m2"
@@ -442,6 +445,10 @@ case "$tool" in
     tool_argv=(codex)
     [[ $yolo_mode -eq 1 ]] && tool_argv+=(--yolo)
     ;;
+  copilot)
+    tool_argv=(copilot)
+    [[ $yolo_mode -eq 1 ]] && tool_argv+=(--yolo)
+    ;;
   gemini)
     tool_argv=(gemini)
     [[ $yolo_mode -eq 1 ]] && tool_argv+=(--yolo)
@@ -452,7 +459,7 @@ case "$tool" in
     ;;
   *)
     echo "Unknown tool: $tool" >&2
-    echo "Supported tools: claude, codex, gemini, vibe" >&2
+    echo "Supported tools: claude, codex, copilot, gemini, vibe" >&2
     exit 1
     ;;
 esac
