@@ -92,7 +92,7 @@ build_attach_cmd() {
 
 # Environment args for exec (PATH not set by entrypoint when using exec)
 exec_env_args() {
-  printf '%s ' -e "HOME=$HOME" -e "PATH=/opt/claude:$HOME/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+  printf '%s ' -e "HOME=$HOME" -e "JAVA_HOME=/opt/jbr" -e "PATH=/opt/claude:/home/dev/.sdkman/candidates/maven/current/bin:/home/dev/.sdkman/candidates/jbang/current/bin:/opt/jbr/bin:$HOME/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 }
 
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
