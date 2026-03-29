@@ -301,6 +301,29 @@ if [ -n "${HOST_HOME:-}" ]; then
   chown -R dev:dev "${HOST_HOME}/.local" 2>/dev/null || true
 fi
 
+# Protect .git/config files from modification (prevents AI tools from changing remote URLs)
+# Files are made root-owned and read-only so the dev user cannot modify or chmod them
+if [ -n "${GIT_PROTECT_DIRS:-}" ]; then
+  IFS=':' read -ra _git_dirs <<< "$GIT_PROTECT_DIRS"
+  for _dir in "${_git_dirs[@]}"; do
+    _git_config="${_dir}/.git/config"
+    # Handle worktrees where .git is a file pointing elsewhere
+    if [ -f "${_dir}/.git" ] && ! [ -d "${_dir}/.git" ]; then
+      _gitdir=$(sed -n 's/^gitdir: //p' "${_dir}/.git")
+      # Resolve relative paths
+      case "$_gitdir" in
+        /*) ;;
+        *) _gitdir="${_dir}/${_gitdir}" ;;
+      esac
+      _git_config="${_gitdir}/config"
+    fi
+    if [ -f "$_git_config" ]; then
+      chown root:root "$_git_config" 2>/dev/null || true
+      chmod 444 "$_git_config" 2>/dev/null || true
+    fi
+  done
+fi
+
 # Drop to dev user (or stay root if STAY_ROOT=1)
 if [ "$(id -u)" = "0" ] && [ "${STAY_ROOT:-}" != "1" ]; then
   USER_HOME="${HOME:-/home/dev}"
