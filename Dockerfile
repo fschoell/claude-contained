@@ -330,6 +330,12 @@ if [ -z "${DISPLAY:-}" ]; then
   Xvfb :99 -screen 0 1280x1024x24 -nolisten tcp &
 fi
 
+# Start virtual framebuffer so Chrome/Chromium can run without a real display
+if [ -z "${DISPLAY:-}" ]; then
+  export DISPLAY=:99
+  Xvfb :99 -screen 0 1280x1024x24 -nolisten tcp &
+fi
+
 # Drop to dev user (or stay root if STAY_ROOT=1)
 if [ "$(id -u)" = "0" ] && [ "${STAY_ROOT:-}" != "1" ]; then
   USER_HOME="${HOME:-/home/dev}"
