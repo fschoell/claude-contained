@@ -146,7 +146,7 @@ run_rebuild() {
     tools)
       refresh_token="$(date -u +%Y%m%d%H%M%S)"
       echo "Rebuilding claude-contained image (AI tools refresh)..." >&2
-      if container build --build-arg "AI_TOOLS_REFRESH_TOKEN=${refresh_token}" -t claude-contained:latest "$build_context"; then
+      if container build --build-arg "AI_TOOLS_CACHE_BUST=${refresh_token}" -t claude-contained:latest "$build_context"; then
         return 0
       fi
       echo "AI tools refresh failed. Retrying with full rebuild..." >&2

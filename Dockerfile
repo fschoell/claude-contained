@@ -137,9 +137,9 @@ RUN set -eux; \
     bun --version
 
 # ---- Language Servers + AI CLIs --------------------------------------------
-ARG AI_TOOLS_REFRESH_TOKEN=stable
+ARG AI_TOOLS_CACHE_BUST=stable
 RUN set -eux; \
-    echo "Refreshing AI tool layers: ${AI_TOOLS_REFRESH_TOKEN}" >/dev/null; \
+    echo "Refreshing AI tool layers: ${AI_TOOLS_CACHE_BUST}" >/dev/null; \
     npm install -g \
     @github/copilot \
     @google/gemini-cli \
