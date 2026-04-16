@@ -11,7 +11,7 @@ Description:
 
 Options:
   -t, --tool TOOL    AI tool to run: claude (default), codex, copilot, gemini, vibe
-  -R, --rebuild[=MODE]  Rebuild image before run: tools (default) or full
+  -R, --rebuild[=MODE]  Rebuild image and exit: tools (default) or full
   -H PORT[:HOSTPORT] Forward host port to container localhost (can be repeated)
   -p HOST:CONTAINER  Publish container port to host (can be repeated)
   -s, --shell        Start a bash shell instead of the AI tool (for debugging)
@@ -41,8 +41,8 @@ Examples:
   claude-contained -y -t codex .       # Codex with --yolo
   claude-contained -S .                # Enable SSH agent (for git push)
   claude-contained -s                  # Debug shell in current directory
-  claude-contained --rebuild .         # Refresh AI tools before run
-  claude-contained --rebuild=full .    # Full fresh rebuild before run
+  claude-contained --rebuild           # Refresh AI tools, then exit
+  claude-contained --rebuild=full      # Full fresh rebuild, then exit
   claude-contained -p 8080:8080 .      # Expose port 8080
   claude-contained -H 3845 .           # Forward host:3845 to container localhost:3845
   claude-contained -a                  # List and attach to running container
@@ -261,12 +261,14 @@ if ! container system status &>/dev/null; then
   esac
 fi
 
+# Handle rebuild mode (rebuild and exit)
+if [[ "$rebuild_mode" != "none" ]]; then
+  run_rebuild "$rebuild_mode"
+  exit 0
+fi
+
 # Handle attach mode
 if [[ $attach_mode -eq 1 ]]; then
-  if [[ "$rebuild_mode" != "none" ]]; then
-    echo "Warning: --rebuild is ignored in attach mode; start a new container to use the rebuilt image." >&2
-    rebuild_mode="none"
-  fi
   # Get running containers with our prefix
   prefix="aic-"
   containers=()
@@ -424,10 +426,6 @@ HOST_GITCONFIG="${HOST_HOME}/.gitconfig"
 
 # Ensure persistent directories exist on host
 mkdir -p "${HOST_CLAUDE_DIR}" "${HOST_CODEX_DIR}" "${HOST_COPILOT_DIR}" "${HOST_GEMINI_DIR}" "${HOST_VIBE_DIR}" "${HOST_M2_DIR}" "${HOST_VAADIN_DIR}"
-
-if [[ "$rebuild_mode" != "none" ]]; then
-  run_rebuild "$rebuild_mode"
-fi
 
 # Build container args
 CLAUDE_MEMORY="${CLAUDE_MEMORY:-8g}"
