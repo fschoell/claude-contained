@@ -207,6 +207,15 @@ RUN set -eux; \
     echo "SDKMAN! setup complete - Maven and JBang installed"
 USER root
 
+# ---- Symlink key binaries to /usr/local/bin ---------------------------------
+# Codex runs `bash -lc` which sources /etc/profile, clobbering inherited PATH.
+# Symlinks ensure java/mvn/jbang are found via the default Debian PATH.
+RUN ln -sf /opt/jbr/bin/java /usr/local/bin/java \
+ && ln -sf /opt/jbr/bin/javac /usr/local/bin/javac \
+ && ln -sf /opt/jbr/bin/jar /usr/local/bin/jar \
+ && ln -sf /home/dev/.sdkman/candidates/maven/current/bin/mvn /usr/local/bin/mvn \
+ && ln -sf /home/dev/.sdkman/candidates/jbang/current/bin/jbang /usr/local/bin/jbang
+
 # ---- Entrypoint (host.local setup + path parity) ---------------------------
 RUN cat <<'EOF' > /usr/local/bin/entrypoint.sh
 #!/bin/bash
