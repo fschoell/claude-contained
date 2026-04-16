@@ -60,6 +60,7 @@ claude-contained [options] [main_dir] [extra_dir ...] [-- <tool args...>]
 | Flag | Description |
 |------|-------------|
 | `-t`, `--tool TOOL` | AI tool to run: `claude` (default), `codex`, `gemini`, `vibe` |
+| `-R`, `--rebuild[=MODE]` | Rebuild image before run: `tools` (default) or `full` |
 | `-H PORT[:HOSTPORT]` | Forward host port to container localhost (can be repeated) |
 | `-p HOST:CONTAINER` | Publish container port to host (can be repeated) |
 | `-s`, `--shell` | Start a bash shell instead of the AI tool (for debugging) |
@@ -102,12 +103,29 @@ claude-contained -t vibe .                          # Mistral Vibe
 claude-contained . ../other/project                 # Multiple directories
 claude-contained . -- --model sonnet --verbose      # Pass args to tool
 claude-contained -y -t codex .                      # Codex with --yolo
+claude-contained --rebuild .                        # Refresh AI tools first
+claude-contained --rebuild=full .                   # Full fresh rebuild first
 claude-contained -s                                 # Debug shell
 
 # Port forwarding
 claude-contained -p 8080:8080 .                     # Expose port 8080
 claude-contained -H 3845 .                          # Forward host:3845 to container
 ```
+
+## Rebuilding the Image
+
+Use the launcher when you want the image refreshed before starting a new session:
+
+```bash
+claude-contained --rebuild .      # Refresh AI CLI layers
+claude-contained --rebuild=full . # Full fresh rebuild (--pull --no-cache)
+claude-docked --rebuild .
+claude-docked --rebuild=full .
+```
+
+`tools` rebuilds the AI CLI portion of the image and everything after it, which updates Claude Code, Codex, Gemini, Vibe, and Copilot without invalidating the entire build. If that targeted rebuild fails, the launcher automatically retries with a full rebuild.
+
+`full` forces a clean rebuild of the entire image and pulls the latest base image. Rebuild requires the launcher script to run from this repo checkout, or via a symlink into it, so it can find the local `Dockerfile`.
 
 ## Node.js Projects (node_modules Overlay)
 
@@ -248,4 +266,3 @@ Use the claude-contained image as a VS Code devcontainer for Java/Spring/Vaadin 
 - **host.local may not work**: VS Code manages networking differently; use explicit port forwarding instead
 
 See `devcontainer/README.md` for detailed usage and customization options.
-

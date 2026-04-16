@@ -137,7 +137,10 @@ RUN set -eux; \
     bun --version
 
 # ---- Language Servers + AI CLIs --------------------------------------------
-RUN npm install -g \
+ARG AI_TOOLS_REFRESH_TOKEN=stable
+RUN set -eux; \
+    echo "Refreshing AI tool layers: ${AI_TOOLS_REFRESH_TOKEN}" >/dev/null; \
+    npm install -g \
     @github/copilot \
     @google/gemini-cli \
     @openai/codex \
