@@ -191,6 +191,10 @@ port_maps=()
 host_forwards=()
 while [[ "${1:-}" == -* ]]; do
   case "${1:-}" in
+    -h|--help)
+      show_help
+      exit 0
+      ;;
     --readonly-extras)
       ro_default=1
       shift
