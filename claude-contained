@@ -19,6 +19,7 @@ Options:
   -w, --worktree     Auto-include git worktree's main repository (skip prompt)
   -y, --yolo         Skip all permission prompts (tool-specific flag)
   -N, --contained-node-modules  Use container-specific node_modules (skip prompt)
+  --readonly-extras  Mount all extra dirs read-only (suffix overrides per-path)
   -a, --attach [NAME]  Attach to running container (runs tool, or bash with -s)
   -h, --help         Show this help message
 
@@ -26,6 +27,8 @@ Behavior:
   - If no directories are provided, defaults to the current directory.
   - Directories are mounted at their original host paths for full path parity.
   - Additional directories are automatically added via --add-dir (claude, codex only).
+  - Append :ro to an extra dir to mount it read-only (or :rw to force read-write).
+    The working directory cannot be read-only.
   - Tool configs (~/.claude, ~/.codex, ~/.copilot, ~/.gemini, ~/.vibe), Maven cache (~/.m2), and Vaadin state (~/.vaadin) are bind-mounted.
   - SSH agent forwarding is disabled by default; use --ssh to enable (for git push).
   - Git worktrees are detected; main repository's .git directory is mounted for full git access.
@@ -37,6 +40,8 @@ Examples:
   claude-contained -t gemini .         # Run gemini instead
   claude-contained -t vibe .           # Run vibe instead
   claude-contained . ../other/project  # Mount extra directories
+  claude-contained . ../lib:ro         # Mount ../lib read-only
+  claude-contained --readonly-extras . ../a ../b  # All extras read-only
   claude-contained . -- --model sonnet # Pass args to tool
   claude-contained -y -t codex .       # Codex with --yolo
   claude-contained -S .                # Enable SSH agent (for git push)
@@ -181,10 +186,15 @@ attach_name=""
 custom_container_name=""
 rebuild_mode="none"
 tool="claude"
+ro_default=0
 port_maps=()
 host_forwards=()
 while [[ "${1:-}" == -* ]]; do
   case "${1:-}" in
+    --readonly-extras)
+      ro_default=1
+      shift
+      ;;
     --rebuild)
       rebuild_mode="tools"
       shift
@@ -356,6 +366,29 @@ done
 if [[ ${#paths[@]} -eq 0 ]]; then
   paths+=(".")
 fi
+
+# Strip :ro / :rw suffixes; build parallel path_modes[] (rw|ro per index).
+# Working dir (index 0) cannot be ro. --readonly-extras sets the default for
+# unsuffixed extras; an explicit suffix always wins.
+path_modes=()
+for i in "${!paths[@]}"; do
+  p="${paths[$i]}"
+  mode=""
+  if   [[ "$p" == *:ro ]]; then p="${p%:ro}"; mode="ro"
+  elif [[ "$p" == *:rw ]]; then p="${p%:rw}"; mode="rw"
+  fi
+  if [[ $i -eq 0 ]]; then
+    if [[ "$mode" == "ro" ]]; then
+      echo "error: working directory cannot be read-only" >&2
+      exit 2
+    fi
+    mode="rw"
+  elif [[ -z "$mode" ]]; then
+    [[ $ro_default -eq 1 ]] && mode="ro" || mode="rw"
+  fi
+  paths[$i]="$p"
+  path_modes+=("$mode")
+done
 
 # Detect if directory is a git worktree and return main repo path
 # Returns empty string if not a worktree
@@ -548,9 +581,12 @@ case "$tool" in
 esac
 
 # Additional mounts at original host paths
-for p in "${paths[@]:1}"; do
-  hp="$(resolve_path "$p")"
-  container_argv+=( --mount "type=bind,src=${hp},dst=${hp}" )
+for i in "${!paths[@]}"; do
+  [[ $i -eq 0 ]] && continue
+  hp="$(resolve_path "${paths[$i]}")"
+  mopts="type=bind,src=${hp},dst=${hp}"
+  [[ "${path_modes[$i]}" == "ro" ]] && mopts="${mopts},readonly"
+  container_argv+=( --mount "$mopts" )
   # Only claude and codex support --add-dir
   [[ "$tool" == "claude" || "$tool" == "codex" ]] && tool_argv+=( --add-dir "${hp}" )
 done
@@ -560,8 +596,11 @@ if [[ "$(uname)" != "Linux" ]]; then
   # Container is Linux; host is not — node_modules may need platform-specific binaries
   nm_platform="linux-$(container_arch)"
   nm_check_dirs=("$main_host")
-  for p in "${paths[@]:1}"; do
-    nm_check_dirs+=("$(resolve_path "$p")")
+  # Skip read-only extras: the overlay needs to write .claude-contained/ inside the dir.
+  for i in "${!paths[@]}"; do
+    [[ $i -eq 0 ]] && continue
+    [[ "${path_modes[$i]}" == "ro" ]] && continue
+    nm_check_dirs+=("$(resolve_path "${paths[$i]}")")
   done
 
   nm_overlay_dirs=()

@@ -87,6 +87,7 @@ All config directories are bind-mounted regardless of which tool you run.
 
 - First directory is the working directory
 - Additional directories are mounted and auto-added via `--add-dir` (Claude and Codex only)
+- Append `:ro` to an extra dir to mount it read-only (or `:rw` to force read-write); use `--readonly-extras` to default all extras to read-only
 - Tool configs and Maven cache (`~/.m2`) are bind-mounted for persistence
 - SSH agent forwarding is disabled by default; use `-S`/`--ssh` to enable
 - Git worktrees are detected; main repository is included for full git access
@@ -102,6 +103,8 @@ claude-contained -t vibe .                          # Mistral Vibe
 
 # Common usage
 claude-contained . ../other/project                 # Multiple directories
+claude-contained . ../lib:ro                        # Mount ../lib read-only
+claude-contained --readonly-extras . ../a ../b      # All extras read-only
 claude-contained . -- --model sonnet --verbose      # Pass args to tool
 claude-contained -y -t codex .                      # Codex with --yolo
 claude-contained --rebuild .                        # Refresh AI tools first
