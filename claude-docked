@@ -124,6 +124,19 @@ container_arch() {
   echo "$arch"
 }
 
+# Detect host's IANA timezone (e.g. "Europe/Helsinki") so the container clock
+# matches the host. Works on macOS (/var/db/timezone/zoneinfo/...) and Linux
+# (/usr/share/zoneinfo/...). Falls back to $TZ if set, then empty.
+host_timezone() {
+  if [[ -n "${TZ:-}" ]]; then
+    echo "$TZ"
+    return
+  fi
+  local link
+  link="$(readlink /etc/localtime 2>/dev/null)" || return 0
+  [[ "$link" == */zoneinfo/* ]] && echo "${link#*/zoneinfo/}"
+}
+
 find_build_context() {
   local script_path script_dir repo_root
   script_path="$(resolve_path "$0")"
@@ -488,6 +501,7 @@ while docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$container_name"; 
   container_name="${base_container_name}-${suffix}"
   ((suffix++))
 done
+HOST_TZ="$(host_timezone)"
 container_argv=(
   docker run --rm -it
   --memory "${CLAUDE_MEMORY}"
@@ -496,6 +510,7 @@ container_argv=(
   -e "HOST_UID=$(id -u)"
   -e "HOST_GID=$(id -g)"
   -w "${main_host}"
+  ${HOST_TZ:+-e "TZ=${HOST_TZ}"}
   ${AI_GH_TOKEN:+-e "GH_TOKEN=${AI_GH_TOKEN}"}
   --mount "type=bind,src=${HOST_CLAUDE_DIR},dst=${HOST_HOME}/.claude"
   --mount "type=bind,src=${HOST_CODEX_DIR},dst=${HOST_HOME}/.codex"

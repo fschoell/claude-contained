@@ -21,7 +21,7 @@ RUN set -eux; \
     # Base packages
     BASE_PACKAGES=" \
       git openssh-client ca-certificates ripgrep jq \
-      curl bash xz-utils unzip \
+      curl bash xz-utils unzip tzdata \
       python3 python3-pip python3-venv \
       iproute2 gosu socat \
       libasound2 libatk-bridge2.0-0 libatk1.0-0 libatspi2.0-0 \
