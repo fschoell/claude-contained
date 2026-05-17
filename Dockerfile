@@ -302,6 +302,12 @@ if [ -n "${HOST_HOME:-}" ]; then
   chown -R dev:dev "${HOST_HOME}/.local" 2>/dev/null || true
 fi
 
+# Start virtual framebuffer so Chrome/Chromium can run without a real display
+if [ -z "${DISPLAY:-}" ]; then
+  export DISPLAY=:99
+  Xvfb :99 -screen 0 1280x1024x24 -nolisten tcp &
+fi
+
 # Drop to dev user (or stay root if STAY_ROOT=1)
 if [ "$(id -u)" = "0" ] && [ "${STAY_ROOT:-}" != "1" ]; then
   USER_HOME="${HOME:-/home/dev}"
@@ -309,6 +315,7 @@ if [ "$(id -u)" = "0" ] && [ "${STAY_ROOT:-}" != "1" ]; then
     JAVA_HOME="$JAVA_HOME" \
     PATH="${USER_HOME}/.local/bin:$PATH" \
     HOME="$USER_HOME" \
+    DISPLAY="$DISPLAY" \
     "$@"
 else
   # Also update PATH for root/non-gosu case
