@@ -1,5 +1,5 @@
 # Claude Code + JetBrains Runtime (JBR) + HotswapAgent (always on) + Python
-FROM node:20-bookworm-slim
+FROM node:24-bookworm-slim
 
 # ---- JBR pins ---------------------------------------------------------------
 ARG JBR_VERSION=25.0.1
