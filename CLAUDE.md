@@ -65,7 +65,7 @@ claude-contained -N .
 - Only Claude and Codex support `--add-dir` for extra directories; others just get mounts
 - **Container naming**: Both scripts use the `aic-` prefix for container names. Auto-generated names follow the pattern `aic-{folder}-{HHMM}` (e.g., `aic-my-app-1423`). If a container with that name already exists, a numeric suffix is appended (`aic-my-app-1423-2`, `-3`, etc.). Custom names via `-a` also use the `aic-` prefix.
 - **Script parity**: `claude-contained` and `claude-docked` should always be updated together when adding/changing flags or behavior to maintain feature parity across both container runtimes
-- **Worktree pruning protection**: When mounted Git metadata can see linked worktrees that are not mounted into the container, both scripts offer to lock currently unlocked linked worktrees with `git worktree lock --reason ...`. These locks are intentionally persistent and must be removed manually with `git worktree unlock <path>`.
+- **Worktree pruning protection**: When mounted Git metadata can see linked worktrees that are not mounted into the container, both scripts offer to auto-lock unlocked or already auto-locked linked worktrees while the container runs. Auto-lock reasons use `cc-autolocked-by:` owner tokens; non-matching user locks are never changed.
 
 ### Devcontainer Support
 

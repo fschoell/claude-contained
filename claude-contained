@@ -32,7 +32,7 @@ Behavior:
   - Tool configs (~/.claude, ~/.codex, ~/.copilot, ~/.gemini, ~/.vibe), Maven cache (~/.m2), and Vaadin state (~/.vaadin) are bind-mounted.
   - SSH agent forwarding is disabled by default; use --ssh to enable (for git push).
   - Git worktrees are detected; main repository's .git directory is mounted for full git access.
-  - Linked worktrees hidden from the container can be locked to prevent accidental pruning.
+  - Linked worktrees hidden from the container can be auto-locked while the container runs.
 
 Examples:
   claude-contained                     # Run claude in current directory
@@ -460,11 +460,172 @@ path_visible_in_container() {
   return 1
 }
 
+AUTO_LOCK_PREFIX="cc-autolocked-by:"
+auto_worktree_lock_repo=""
+auto_locked_worktrees=()
+
+get_worktree_lock_file() {
+  local wt_path="$1"
+  local git_dir
+
+  git_dir="$(git -C "$wt_path" rev-parse --git-dir 2>/dev/null)" || return 1
+  git_dir="$(cd "$wt_path" && resolve_path "$git_dir")"
+  echo "${git_dir}/locked"
+}
+
+with_worktree_lock_mutex() {
+  local repo_root="$1"
+  local lock_dir="${repo_root}/.git/claude-contained-worktree-locks.lock"
+  local waited=0
+
+  while ! mkdir "$lock_dir" 2>/dev/null; do
+    if [[ $waited -ge 50 ]]; then
+      echo "Warning: timed out waiting for worktree auto-lock mutex; skipping auto-lock update" >&2
+      return 1
+    fi
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+
+  WORKTREE_LOCK_MUTEX_DIR="$lock_dir"
+}
+
+release_worktree_lock_mutex() {
+  if [[ -n "${WORKTREE_LOCK_MUTEX_DIR:-}" ]]; then
+    rmdir "$WORKTREE_LOCK_MUTEX_DIR" 2>/dev/null || true
+    WORKTREE_LOCK_MUTEX_DIR=""
+  fi
+}
+
+reason_has_auto_owner() {
+  local reason="$1"
+  local owner="$2"
+  local owner_part existing
+
+  [[ "$reason" == "$AUTO_LOCK_PREFIX"* ]] || return 1
+  owner_part="${reason#${AUTO_LOCK_PREFIX}}"
+  for existing in $owner_part; do
+    [[ "$existing" == "$owner" ]] && return 0
+  done
+  return 1
+}
+
+write_auto_lock_reason() {
+  local lock_file="$1"
+  shift
+  local reason="$AUTO_LOCK_PREFIX"
+  local owner
+
+  for owner in "$@"; do
+    reason="${reason} ${owner}"
+  done
+  printf '%s\n' "$reason" > "$lock_file"
+}
+
+append_auto_lock_owner() {
+  local lock_file="$1"
+  local owner="$2"
+  local reason owner_part existing
+  local owners=()
+
+  reason="$(cat "$lock_file" 2>/dev/null || true)"
+  [[ "$reason" == "$AUTO_LOCK_PREFIX"* ]] || return 1
+  reason_has_auto_owner "$reason" "$owner" && return 0
+
+  owner_part="${reason#${AUTO_LOCK_PREFIX}}"
+  for existing in $owner_part; do
+    owners+=("$existing")
+  done
+  owners+=("$owner")
+  write_auto_lock_reason "$lock_file" "${owners[@]}"
+}
+
+record_auto_locked_worktree() {
+  local wt_path="$1"
+  local existing
+
+  for existing in "${auto_locked_worktrees[@]+"${auto_locked_worktrees[@]}"}"; do
+    [[ "$existing" == "$wt_path" ]] && return 0
+  done
+  auto_locked_worktrees+=("$wt_path")
+}
+
+add_auto_worktree_lock_owner() {
+  local repo_root="$1"
+  local wt_path="$2"
+  local owner="$3"
+  local lock_file reason
+
+  lock_file="$(get_worktree_lock_file "$wt_path")" || return 1
+  if [[ -f "$lock_file" ]]; then
+    append_auto_lock_owner "$lock_file" "$owner" || return 1
+  else
+    if ! git -C "$repo_root" worktree lock --reason "${AUTO_LOCK_PREFIX} ${owner}" "$wt_path" 2>/dev/null; then
+      reason="$(cat "$lock_file" 2>/dev/null || true)"
+      [[ "$reason" == "$AUTO_LOCK_PREFIX"* ]] || return 1
+      append_auto_lock_owner "$lock_file" "$owner" || return 1
+    fi
+  fi
+
+  record_auto_locked_worktree "$wt_path"
+}
+
+remove_auto_worktree_lock_owner() {
+  local repo_root="$1"
+  local wt_path="$2"
+  local owner="$3"
+  local lock_file reason owner_part existing
+  local owners=()
+  local found=0
+
+  [[ -d "$wt_path" ]] || return 0
+  lock_file="$(get_worktree_lock_file "$wt_path")" || return 0
+  [[ -f "$lock_file" ]] || return 0
+
+  reason="$(cat "$lock_file" 2>/dev/null || true)"
+  [[ "$reason" == "$AUTO_LOCK_PREFIX"* ]] || return 0
+
+  owner_part="${reason#${AUTO_LOCK_PREFIX}}"
+  for existing in $owner_part; do
+    if [[ "$existing" == "$owner" ]]; then
+      found=1
+    else
+      owners+=("$existing")
+    fi
+  done
+  [[ $found -eq 1 ]] || return 0
+
+  if [[ ${#owners[@]} -eq 0 ]]; then
+    git -C "$repo_root" worktree unlock "$wt_path" 2>/dev/null || rm -f "$lock_file"
+  else
+    write_auto_lock_reason "$lock_file" "${owners[@]}"
+  fi
+}
+
+cleanup_auto_worktree_locks() {
+  local wt_path
+  local mutex_held=0
+
+  if [[ -n "${WORKTREE_LOCK_MUTEX_DIR:-}" ]]; then
+    mutex_held=1
+  elif [[ -n "$auto_worktree_lock_repo" && ${#auto_locked_worktrees[@]} -gt 0 ]]; then
+    with_worktree_lock_mutex "$auto_worktree_lock_repo" && mutex_held=1 || return 0
+  fi
+
+  if [[ -n "$auto_worktree_lock_repo" && ${#auto_locked_worktrees[@]} -gt 0 ]]; then
+    for wt_path in "${auto_locked_worktrees[@]}"; do
+      remove_auto_worktree_lock_owner "$auto_worktree_lock_repo" "$wt_path" "$container_name"
+    done
+  fi
+
+  [[ $mutex_held -eq 1 ]] && release_worktree_lock_mutex
+  return 0
+}
+
 maybe_offer_worktree_locks() {
   local repo_root="$1"
   local container_name="$2"
-  local launcher_name="$3"
-  local line wt_path locked prunable
+  local line wt_path locked locked_reason prunable
   local hidden_worktrees=()
 
   [[ -n "$repo_root" ]] || return 0
@@ -472,30 +633,36 @@ maybe_offer_worktree_locks() {
 
   wt_path=""
   locked=0
+  locked_reason=""
   prunable=0
   while IFS= read -r line || [[ -n "$line" ]]; do
     if [[ -z "$line" ]]; then
-      if [[ -n "$wt_path" && "$wt_path" != "$repo_root" && $locked -eq 0 && $prunable -eq 0 && -d "$wt_path" ]]; then
+      if [[ -n "$wt_path" && "$wt_path" != "$repo_root" && $prunable -eq 0 && -d "$wt_path" ]]; then
         if ! path_visible_in_container "$wt_path"; then
-          hidden_worktrees+=("$wt_path")
+          if [[ $locked -eq 0 || "$locked_reason" == "$AUTO_LOCK_PREFIX"* ]]; then
+            hidden_worktrees+=("$wt_path")
+          fi
         fi
       fi
       wt_path=""
       locked=0
+      locked_reason=""
       prunable=0
       continue
     fi
 
     case "$line" in
       worktree\ *) wt_path="${line#worktree }" ;;
-      locked*) locked=1 ;;
+      locked*) locked=1; locked_reason="${line#locked}"; locked_reason="${locked_reason# }" ;;
       prunable*) prunable=1 ;;
     esac
   done < <(git -C "$repo_root" worktree list --porcelain 2>/dev/null || true)
 
-  if [[ -n "$wt_path" && "$wt_path" != "$repo_root" && $locked -eq 0 && $prunable -eq 0 && -d "$wt_path" ]]; then
+  if [[ -n "$wt_path" && "$wt_path" != "$repo_root" && $prunable -eq 0 && -d "$wt_path" ]]; then
     if ! path_visible_in_container "$wt_path"; then
-      hidden_worktrees+=("$wt_path")
+      if [[ $locked -eq 0 || "$locked_reason" == "$AUTO_LOCK_PREFIX"* ]]; then
+        hidden_worktrees+=("$wt_path")
+      fi
     fi
   fi
 
@@ -507,15 +674,19 @@ maybe_offer_worktree_locks() {
   done
   echo "Git inside the container can see ${repo_root}/.git/worktrees, but not those paths."
   echo "A git worktree prune from inside the container could treat them as stale."
-  echo "Locks are left in place after this container exits; remove one later with: git worktree unlock <path>"
-  read -p "Lock these worktrees now? [Y/n] " answer
+  echo "The launcher can auto-lock them now and remove its owner when this container exits."
+  read -p "Auto-lock these worktrees while this container runs? [Y/n] " answer
   case "${answer:-Y}" in
     [Yy]* )
-      local reason="${launcher_name}: hidden from container ${container_name}; prevents git worktree prune"
+      auto_worktree_lock_repo="$repo_root"
+      with_worktree_lock_mutex "$repo_root" || return 0
       for wt_path in "${hidden_worktrees[@]}"; do
-        git -C "$repo_root" worktree lock --reason "$reason" "$wt_path"
+        if ! add_auto_worktree_lock_owner "$repo_root" "$wt_path" "$container_name"; then
+          echo "Warning: could not auto-lock ${wt_path}; leaving it unchanged" >&2
+        fi
       done
-      echo "Locked ${#hidden_worktrees[@]} worktree(s)."
+      release_worktree_lock_mutex
+      echo "Auto-locked ${#auto_locked_worktrees[@]} worktree(s)."
       ;;
   esac
 }
@@ -600,7 +771,8 @@ worktree_lock_repo="$worktree_main_repo"
 if [[ -z "$worktree_lock_repo" ]]; then
   worktree_lock_repo="$(get_main_worktree_repo_root "$main_host")" || true
 fi
-maybe_offer_worktree_locks "$worktree_lock_repo" "$container_name" "$(basename "$0")"
+trap cleanup_auto_worktree_locks EXIT
+maybe_offer_worktree_locks "$worktree_lock_repo" "$container_name"
 HOST_TZ="$(host_timezone)"
 container_argv=(
   container run --rm -it
