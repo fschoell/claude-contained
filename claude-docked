@@ -527,6 +527,16 @@ if [[ -n "$worktree_main_repo" ]]; then
   container_argv+=( --mount "type=bind,src=${worktree_main_repo}/.git,dst=${worktree_main_repo}/.git" )
 fi
 
+# Protect .git/config from AI tools changing remote URLs
+git_protect_dirs="${main_host}"
+for p in "${paths[@]:1}"; do
+  git_protect_dirs="${git_protect_dirs}:$(resolve_path "$p")"
+done
+if [[ -n "$worktree_main_repo" ]]; then
+  git_protect_dirs="${git_protect_dirs}:${worktree_main_repo}"
+fi
+container_argv+=( -e "GIT_PROTECT_DIRS=${git_protect_dirs}" )
+
 # Add port mappings
 for pm in "${port_maps[@]+"${port_maps[@]}"}"; do
   container_argv+=( -p "$pm" )
