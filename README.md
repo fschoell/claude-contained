@@ -91,6 +91,7 @@ All config directories are bind-mounted regardless of which tool you run.
 - Tool configs and Maven cache (`~/.m2`) are bind-mounted for persistence
 - SSH agent forwarding is disabled by default; use `-S`/`--ssh` to enable
 - Git worktrees are detected; main repository is included for full git access
+- If a mounted main repository has linked worktrees outside the mounted directories, the launcher offers to lock those worktrees with `git worktree lock --reason ...` so Git inside the container cannot prune them as stale
 
 ### Examples
 

@@ -32,6 +32,7 @@ Behavior:
   - Tool configs (~/.claude, ~/.codex, ~/.copilot, ~/.gemini, ~/.vibe), Maven cache (~/.m2), and Vaadin state (~/.vaadin) are bind-mounted.
   - SSH agent forwarding is disabled by default; use --ssh to enable (for git push).
   - Git worktrees are detected; main repository's .git directory is mounted for full git access.
+  - Linked worktrees hidden from the container can be locked to prevent accidental pruning.
 
 Examples:
   claude-contained                     # Run claude in current directory
@@ -426,6 +427,99 @@ get_worktree_main_repo() {
   fi
 }
 
+get_main_worktree_repo_root() {
+  local dir="$1"
+  local repo_root common_dir common_abs main_git_abs
+
+  repo_root="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)" || return
+  [[ -d "${repo_root}/.git" ]] || return
+
+  common_dir="$(git -C "$repo_root" rev-parse --git-common-dir 2>/dev/null)" || return
+  common_abs="$(cd "$repo_root" && resolve_path "$common_dir")"
+  main_git_abs="$(resolve_path "${repo_root}/.git")"
+
+  [[ "$common_abs" == "$main_git_abs" ]] && echo "$repo_root"
+}
+
+path_is_at_or_under() {
+  local path="${1%/}"
+  local parent="${2%/}"
+
+  [[ "$path" == "$parent" || "$path" == "$parent"/* ]]
+}
+
+path_visible_in_container() {
+  local path="$1"
+  local mounted
+
+  for mounted in "${mounted_roots[@]+"${mounted_roots[@]}"}"; do
+    if path_is_at_or_under "$path" "$mounted"; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+maybe_offer_worktree_locks() {
+  local repo_root="$1"
+  local container_name="$2"
+  local launcher_name="$3"
+  local line wt_path locked prunable
+  local hidden_worktrees=()
+
+  [[ -n "$repo_root" ]] || return 0
+  path_visible_in_container "${repo_root}/.git" || return 0
+
+  wt_path=""
+  locked=0
+  prunable=0
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    if [[ -z "$line" ]]; then
+      if [[ -n "$wt_path" && "$wt_path" != "$repo_root" && $locked -eq 0 && $prunable -eq 0 && -d "$wt_path" ]]; then
+        if ! path_visible_in_container "$wt_path"; then
+          hidden_worktrees+=("$wt_path")
+        fi
+      fi
+      wt_path=""
+      locked=0
+      prunable=0
+      continue
+    fi
+
+    case "$line" in
+      worktree\ *) wt_path="${line#worktree }" ;;
+      locked*) locked=1 ;;
+      prunable*) prunable=1 ;;
+    esac
+  done < <(git -C "$repo_root" worktree list --porcelain 2>/dev/null || true)
+
+  if [[ -n "$wt_path" && "$wt_path" != "$repo_root" && $locked -eq 0 && $prunable -eq 0 && -d "$wt_path" ]]; then
+    if ! path_visible_in_container "$wt_path"; then
+      hidden_worktrees+=("$wt_path")
+    fi
+  fi
+
+  [[ ${#hidden_worktrees[@]} -gt 0 ]] || return 0
+
+  echo "Some linked git worktrees are not mounted into the container:"
+  for wt_path in "${hidden_worktrees[@]}"; do
+    echo "  ${wt_path}"
+  done
+  echo "Git inside the container can see ${repo_root}/.git/worktrees, but not those paths."
+  echo "A git worktree prune from inside the container could treat them as stale."
+  echo "Locks are left in place after this container exits; remove one later with: git worktree unlock <path>"
+  read -p "Lock these worktrees now? [Y/n] " answer
+  case "${answer:-Y}" in
+    [Yy]* )
+      local reason="${launcher_name}: hidden from container ${container_name}; prevents git worktree prune"
+      for wt_path in "${hidden_worktrees[@]}"; do
+        git -C "$repo_root" worktree lock --reason "$reason" "$wt_path"
+      done
+      echo "Locked ${#hidden_worktrees[@]} worktree(s)."
+      ;;
+  esac
+}
+
 check_for_updates() {
   (
     local script_path script_dir repo_root local_rev upstream_rev
@@ -444,6 +538,11 @@ check_for_updates() {
 
 main_host="$(resolve_path "${paths[0]}")"
 
+mounted_roots=("$main_host")
+for p in "${paths[@]:1}"; do
+  mounted_roots+=("$(resolve_path "$p")")
+done
+
 # Check if main directory is a git worktree
 worktree_main_repo=""
 worktree_main_repo="$(get_worktree_main_repo "$main_host")" || true
@@ -461,6 +560,9 @@ if [[ -n "$worktree_main_repo" ]]; then
       * ) worktree_main_repo="" ;;  # Don't include
     esac
   fi
+fi
+if [[ -n "$worktree_main_repo" ]]; then
+  mounted_roots+=("${worktree_main_repo}/.git")
 fi
 
 # Capture host HOME for path parity
@@ -494,6 +596,11 @@ while container list --quiet 2>/dev/null | grep -qx "$container_name"; do
   container_name="${base_container_name}-${suffix}"
   ((suffix++))
 done
+worktree_lock_repo="$worktree_main_repo"
+if [[ -z "$worktree_lock_repo" ]]; then
+  worktree_lock_repo="$(get_main_worktree_repo_root "$main_host")" || true
+fi
+maybe_offer_worktree_locks "$worktree_lock_repo" "$container_name" "$(basename "$0")"
 HOST_TZ="$(host_timezone)"
 container_argv=(
   container run --rm -it
