@@ -69,6 +69,7 @@ claude-contained [options] [main_dir] [extra_dir ...] [-- <tool args...>]
 | `-w`, `--worktree` | Auto-include git worktree's main repository (skip prompt) |
 | `-y`, `--yolo` | Skip all permission prompts (tool-specific flag) |
 | `-N`, `--contained-node-modules` | Use container-specific node_modules (skip prompt) |
+| `--share-skills=DIR` | Mount shared skill folders from `DIR` (opt-in, no default; use a full path) |
 | `-a`, `--attach [NAME]` | Attach to running container (runs tool, or bash with `-s`) |
 | `-h`, `--help` | Show help message |
 
@@ -89,6 +90,7 @@ All config directories are bind-mounted regardless of which tool you run.
 - Additional directories are mounted and auto-added via `--add-dir` (Claude and Codex only)
 - Append `:ro` to an extra dir to mount it read-only (or `:rw` to force read-write); use `--readonly-extras` to default all extras to read-only
 - Tool configs and Maven cache (`~/.m2`) are bind-mounted for persistence
+- `--share-skills=DIR` mounts `DIR` as each tool's skills directory: `~/.claude/skills`, `~/.codex/skills`, `~/.agents/skills`, and `~/.<tool>/skills` for Copilot, Gemini, and Vibe. For Codex, the host's `~/.codex/skills/.system` is mounted back over `DIR/.system` so built-in skills remain visible while new installs write to `DIR`. Use a full path; `~` is not expanded by the launcher.
 - SSH agent forwarding is disabled by default; use `-S`/`--ssh` to enable
 - Git worktrees are detected; main repository is included for full git access
 - If a mounted main repository has linked worktrees outside the mounted directories, the launcher offers to auto-lock those worktrees while the container runs. Auto-lock reasons use `cc-autolocked-by:` and are removed when the last owning container exits.
@@ -111,6 +113,7 @@ claude-contained -y -t codex .                      # Codex with --yolo
 claude-contained --rebuild .                        # Refresh AI tools first
 claude-contained --rebuild=full .                   # Full fresh rebuild first
 claude-contained -s                                 # Debug shell
+claude-contained --share-skills=/Users/me/Projects/skills . # Share skills into tool skill dirs
 
 # Port forwarding
 claude-contained -p 8080:8080 .                     # Expose port 8080

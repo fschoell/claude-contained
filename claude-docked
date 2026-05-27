@@ -19,6 +19,7 @@ Options:
   -w, --worktree     Auto-include git worktree's main repository (skip prompt)
   -y, --yolo         Skip all permission prompts (tool-specific flag)
   -N, --contained-node-modules  Use container-specific node_modules (skip prompt)
+  --share-skills=DIR  Mount shared skill folders from DIR (opt-in)
   --readonly-extras  Mount all extra dirs read-only (suffix overrides per-path)
   -a, --attach [NAME]  Attach to running container (runs tool, or bash with -s)
   -h, --help         Show this help message
@@ -30,6 +31,9 @@ Behavior:
   - Append :ro to an extra dir to mount it read-only (or :rw to force read-write).
     The working directory cannot be read-only.
   - Tool configs (~/.claude, ~/.codex, ~/.copilot, ~/.gemini, ~/.vibe), Maven cache (~/.m2), and Vaadin state (~/.vaadin) are bind-mounted.
+  - --share-skills=DIR mounts DIR as each tool's skills directory.
+    For Codex, ~/.codex/skills/.system is mounted back over DIR/.system
+    so built-in skills remain visible while new installs write to DIR.
   - SSH agent forwarding is disabled by default; use --ssh to enable (for git push).
   - Git worktrees are detected; main repository's .git directory is mounted for full git access.
   - Linked worktrees hidden from the container can be auto-locked while the container runs.
@@ -51,6 +55,7 @@ Examples:
   claude-docked --rebuild=full      # Full fresh rebuild, then exit
   claude-docked -p 8080:8080 .       # Expose port 8080
   claude-docked -H 3845 .            # Forward host:3845 to container localhost:3845
+  claude-docked --share-skills=/Users/me/Projects/skills .
   claude-docked -a                   # List and attach to running container
   claude-docked -a myproject         # Attach or create named container
 
@@ -123,6 +128,14 @@ container_arch() {
   # Normalize macOS arm64 to Linux aarch64
   [[ "$arch" == "arm64" ]] && arch="aarch64"
   echo "$arch"
+}
+
+dir_is_empty() {
+  local entry
+  for entry in "$1"/* "$1"/.[!.]* "$1"/..?*; do
+    [[ -e "$entry" ]] && return 1
+  done
+  return 0
 }
 
 # Detect host's IANA timezone (e.g. "Europe/Helsinki") so the container clock
@@ -204,6 +217,7 @@ custom_container_name=""
 rebuild_mode="none"
 tool="claude"
 ro_default=0
+share_skills_dir=""
 port_maps=()
 host_forwards=()
 while [[ "${1:-}" == -* ]]; do
@@ -214,6 +228,18 @@ while [[ "${1:-}" == -* ]]; do
       ;;
     --readonly-extras)
       ro_default=1
+      shift
+      ;;
+    --share-skills)
+      echo "error: --share-skills requires --share-skills=DIR" >&2
+      exit 2
+      ;;
+    --share-skills=*)
+      share_skills_dir="${1#*=}"
+      if [[ -z "$share_skills_dir" ]]; then
+        echo "error: --share-skills requires a non-empty directory" >&2
+        exit 2
+      fi
       shift
       ;;
     --rebuild)
@@ -282,6 +308,14 @@ while [[ "${1:-}" == -* ]]; do
       ;;
   esac
 done
+
+if [[ -n "$share_skills_dir" ]]; then
+  if [[ ! -d "$share_skills_dir" ]]; then
+    echo "error: --share-skills directory does not exist: $share_skills_dir" >&2
+    exit 2
+  fi
+  share_skills_dir="$(resolve_path "$share_skills_dir")"
+fi
 
 # Ensure Docker is running
 if ! docker info &>/dev/null; then
@@ -801,6 +835,28 @@ container_argv=(
   --mount "type=bind,src=${main_host},dst=${main_host}"
 )
 
+add_shared_skills_mount() {
+  local dst="$1"
+  local dst_parent="$2"
+
+  [[ -n "$dst_parent" ]] && mkdir -p "$dst_parent"
+  container_argv+=( --mount "type=bind,src=${share_skills_dir},dst=${dst}" )
+  echo "Sharing skills: ${share_skills_dir} -> ${dst}" >&2
+}
+
+if [[ -n "$share_skills_dir" ]]; then
+  add_shared_skills_mount "${HOST_CLAUDE_DIR}/skills" "${HOST_CLAUDE_DIR}"
+  add_shared_skills_mount "${HOST_CODEX_DIR}/skills" "${HOST_CODEX_DIR}"
+  add_shared_skills_mount "${HOST_HOME}/.agents/skills" "${HOST_HOME}/.agents"
+  add_shared_skills_mount "${HOST_COPILOT_DIR}/skills" "${HOST_COPILOT_DIR}"
+  add_shared_skills_mount "${HOST_GEMINI_DIR}/skills" "${HOST_GEMINI_DIR}"
+  add_shared_skills_mount "${HOST_VIBE_DIR}/skills" "${HOST_VIBE_DIR}"
+
+  if [[ -d "${HOST_CODEX_DIR}/skills/.system" ]]; then
+    container_argv+=( --mount "type=bind,src=${HOST_CODEX_DIR}/skills/.system,dst=${HOST_CODEX_DIR}/skills/.system" )
+  fi
+fi
+
 # Mount worktree's main repository .git directory (not the working tree)
 if [[ -n "$worktree_main_repo" ]]; then
   container_argv+=( --mount "type=bind,src=${worktree_main_repo}/.git,dst=${worktree_main_repo}/.git" )
@@ -952,7 +1008,7 @@ if [[ "$(uname)" != "Linux" ]]; then
         nm_target="${nm_dir}/.claude-contained/node_modules-${nm_platform}"
         mkdir -p "${nm_target}"
         container_argv+=( --mount "type=bind,src=${nm_target},dst=${nm_dir}/node_modules" )
-        if [[ -z "$(ls -A "${nm_target}" 2>/dev/null)" ]]; then
+        if dir_is_empty "${nm_target}"; then
           echo "Created ${nm_target}" >&2
           echo "  Run 'npm install' (or your package manager) inside the container." >&2
         fi
