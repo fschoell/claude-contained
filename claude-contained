@@ -847,6 +847,7 @@ if [[ -n "$share_skills_dir" ]]; then
 
   if [[ -d "${HOST_CODEX_DIR}/skills/.system" ]]; then
     container_argv+=( --mount "type=bind,src=${HOST_CODEX_DIR}/skills/.system,dst=${HOST_CODEX_DIR}/skills/.system" )
+    echo "Sharing Codex system skills: ${HOST_CODEX_DIR}/skills/.system -> ${HOST_CODEX_DIR}/skills/.system" >&2
   fi
 fi
 
