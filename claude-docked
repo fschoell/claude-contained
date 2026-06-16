@@ -17,6 +17,7 @@ Options:
   -s, --shell        Start a bash shell instead of the AI tool (for debugging)
   -S, --ssh          Enable SSH agent forwarding (for git push)
   -w, --worktree     Auto-include git worktree's main repository (skip prompt)
+  -W, --lock-worktrees  Auto-lock hidden linked worktrees (skip prompt)
   -y, --yolo         Skip all permission prompts (tool-specific flag)
   -N, --contained-node-modules  Use container-specific node_modules (skip prompt)
   --share-skills=DIR  Mount shared skill folders from DIR (opt-in)
@@ -209,6 +210,7 @@ fi
 shell_mode=0
 ssh_mode=0
 worktree_mode=0
+lock_worktrees=0
 yolo_mode=0
 contained_node_modules=0
 attach_mode=0
@@ -269,6 +271,10 @@ while [[ "${1:-}" == -* ]]; do
       ;;
     -w|--worktree)
       worktree_mode=1
+      shift
+      ;;
+    -W|--lock-worktrees)
+      lock_worktrees=1
       shift
       ;;
     -y|--yolo)
@@ -709,14 +715,12 @@ maybe_offer_worktree_locks() {
 
   [[ ${#hidden_worktrees[@]} -gt 0 ]] || return 0
 
-  echo "Some linked git worktrees are not mounted into the container:"
-  for wt_path in "${hidden_worktrees[@]}"; do
-    echo "  ${wt_path}"
-  done
-  echo "Git inside the container can see ${repo_root}/.git/worktrees, but not those paths."
-  echo "A git worktree prune from inside the container could treat them as stale."
-  echo "The launcher can auto-lock them now and remove its owner when this container exits."
-  read -p "Auto-lock these worktrees while this container runs? [Y/n] " answer
+  echo "${#hidden_worktrees[@]} linked worktree(s) under ${repo_root} hidden from container (prune risk)."
+  if [[ ${lock_worktrees:-0} -eq 1 ]]; then
+    answer="Y"
+  else
+    read -p "Auto-lock them while this container runs? [Y/n] " answer
+  fi
   case "${answer:-Y}" in
     [Yy]* )
       auto_worktree_lock_repo="$repo_root"
