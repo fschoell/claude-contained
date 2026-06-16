@@ -323,8 +323,8 @@ if [[ -n "$share_skills_dir" ]]; then
   share_skills_dir="$(resolve_path "$share_skills_dir")"
 fi
 
-# Ensure Docker is running
-if ! docker info &>/dev/null; then
+# Ensure Docker is running (skipped when sourced for tests)
+if [[ -z "${CLAUDE_CONTAINED_LIB_ONLY:-}" ]] && ! docker info &>/dev/null; then
   read -p "Docker is not running. Start Docker Desktop? [Y/n] " answer
   case "${answer:-Y}" in
     [Yy]* )
@@ -508,6 +508,10 @@ path_visible_in_container() {
 }
 
 AUTO_LOCK_PREFIX="cc-autolocked-by:"
+# A held mutex lives only a fraction of a second; anything older than this was
+# left by a launcher that died without releasing it and may be reclaimed.
+WORKTREE_LOCK_MUTEX_STALE_SECS=30
+WORKTREE_CLEANUP_DONE=0
 auto_worktree_lock_repo=""
 auto_locked_worktrees=()
 
@@ -520,25 +524,65 @@ get_worktree_lock_file() {
   echo "${git_dir}/locked"
 }
 
+# Decide whether a mutex directory we failed to create was abandoned by a dead
+# launcher. Without this, a single crash/kill while the mutex was briefly held
+# would block every future run on the repo, silently disabling auto-locking.
+mutex_holder_is_stale() {
+  local lock_dir="$1"
+  local owner_file="${lock_dir}/owner"
+  local holder_pid="" holder_ts="" now age
+
+  # A live holder writes its owner file within microseconds of creating the
+  # directory; a persistently missing one means the holder died mid-acquire.
+  [[ -f "$owner_file" ]] || return 0
+
+  read -r holder_pid holder_ts < "$owner_file" 2>/dev/null || true
+
+  # Holder process is gone -> stale.
+  if [[ -n "$holder_pid" ]] && ! kill -0 "$holder_pid" 2>/dev/null; then
+    return 0
+  fi
+
+  # Age fallback guards against PID reuse and platforms with unreliable kill -0.
+  now="$(date +%s 2>/dev/null || echo 0)"
+  if [[ -n "$holder_ts" && "$holder_ts" -gt 0 && "$now" -gt "$holder_ts" ]]; then
+    age=$((now - holder_ts))
+    [[ $age -ge $WORKTREE_LOCK_MUTEX_STALE_SECS ]] && return 0
+  fi
+
+  return 1
+}
+
 with_worktree_lock_mutex() {
   local repo_root="$1"
   local lock_dir="${repo_root}/.git/claude-contained-worktree-locks.lock"
   local waited=0
 
   while ! mkdir "$lock_dir" 2>/dev/null; do
+    # After a short grace period, reclaim the lock if its holder is gone.
+    if [[ $waited -ge 5 ]] && mutex_holder_is_stale "$lock_dir"; then
+      echo "Note: reclaiming stale worktree auto-lock mutex from a defunct launcher" >&2
+      rm -f "${lock_dir}/owner" 2>/dev/null || true
+      rmdir "$lock_dir" 2>/dev/null || true
+      waited=0
+      continue
+    fi
     if [[ $waited -ge 50 ]]; then
-      echo "Warning: timed out waiting for worktree auto-lock mutex; skipping auto-lock update" >&2
+      echo "Warning: timed out waiting for worktree auto-lock mutex" >&2
       return 1
     fi
     sleep 0.1
     waited=$((waited + 1))
   done
 
+  # Record holder identity + time so a later run can detect a stale hold.
+  printf '%s %s\n' "$$" "$(date +%s 2>/dev/null || echo 0)" > "${lock_dir}/owner" 2>/dev/null || true
   WORKTREE_LOCK_MUTEX_DIR="$lock_dir"
 }
 
 release_worktree_lock_mutex() {
   if [[ -n "${WORKTREE_LOCK_MUTEX_DIR:-}" ]]; then
+    rm -f "${WORKTREE_LOCK_MUTEX_DIR}/owner" 2>/dev/null || true
     rmdir "$WORKTREE_LOCK_MUTEX_DIR" 2>/dev/null || true
     WORKTREE_LOCK_MUTEX_DIR=""
   fi
@@ -653,19 +697,30 @@ cleanup_auto_worktree_locks() {
   local wt_path
   local mutex_held=0
 
+  [[ ${WORKTREE_CLEANUP_DONE:-0} -eq 1 ]] && return 0
+  WORKTREE_CLEANUP_DONE=1
+
+  [[ -n "$auto_worktree_lock_repo" && ${#auto_locked_worktrees[@]} -gt 0 ]] || return 0
+
   if [[ -n "${WORKTREE_LOCK_MUTEX_DIR:-}" ]]; then
     mutex_held=1
-  elif [[ -n "$auto_worktree_lock_repo" && ${#auto_locked_worktrees[@]} -gt 0 ]]; then
-    with_worktree_lock_mutex "$auto_worktree_lock_repo" && mutex_held=1 || return 0
+  elif with_worktree_lock_mutex "$auto_worktree_lock_repo"; then
+    mutex_held=1
   fi
 
-  if [[ -n "$auto_worktree_lock_repo" && ${#auto_locked_worktrees[@]} -gt 0 ]]; then
+  # Only edit the owner list while holding the mutex: a racing cleanup could
+  # otherwise drop a still-live owner and unlock a worktree another container is
+  # using. If the mutex is unavailable, leave the locks in place (release with
+  # `git worktree unlock`); erring toward over-locking never destroys data.
+  if [[ $mutex_held -eq 1 ]]; then
     for wt_path in "${auto_locked_worktrees[@]}"; do
       remove_auto_worktree_lock_owner "$auto_worktree_lock_repo" "$wt_path" "$container_name"
     done
+    release_worktree_lock_mutex
+  else
+    echo "Warning: could not acquire worktree auto-lock mutex during cleanup;" >&2
+    echo "         leaving auto-locks in place (release with 'git -C \"${auto_worktree_lock_repo}\" worktree unlock <path>')." >&2
   fi
-
-  [[ $mutex_held -eq 1 ]] && release_worktree_lock_mutex
   return 0
 }
 
@@ -724,7 +779,14 @@ maybe_offer_worktree_locks() {
   case "${answer:-Y}" in
     [Yy]* )
       auto_worktree_lock_repo="$repo_root"
-      with_worktree_lock_mutex "$repo_root" || return 0
+      # Fail safe: if the mutex is unavailable, still apply the locks rather
+      # than launch the container with the worktrees unprotected. The mutex only
+      # serializes the owner-list bookkeeping; a lone racing append at worst
+      # leaks a lock (over-protection), never a removal.
+      if ! with_worktree_lock_mutex "$repo_root"; then
+        echo "Warning: proceeding to auto-lock without the serialization mutex;" >&2
+        echo "         a concurrent launcher on this repo could race on lock bookkeeping." >&2
+      fi
       for wt_path in "${hidden_worktrees[@]}"; do
         if ! add_auto_worktree_lock_owner "$repo_root" "$wt_path" "$container_name"; then
           echo "Warning: could not auto-lock ${wt_path}; leaving it unchanged" >&2
@@ -751,6 +813,12 @@ check_for_updates() {
     fi
   ) 2>/dev/null || true
 }
+
+# Test hook: when sourced with CLAUDE_CONTAINED_LIB_ONLY=1, stop here so the
+# helper functions above can be unit-tested without launching a container.
+if [[ -n "${CLAUDE_CONTAINED_LIB_ONLY:-}" ]]; then
+  return 0
+fi
 
 main_host="$(resolve_path "${paths[0]}")"
 
@@ -817,6 +885,13 @@ if [[ -z "$worktree_lock_repo" ]]; then
   worktree_lock_repo="$(get_main_worktree_repo_root "$main_host")" || true
 fi
 trap cleanup_auto_worktree_locks EXIT
+# Route common termination signals through `exit` so the EXIT handler (which
+# releases the mutex and removes this container's lock owners) always runs.
+# Bash defers a trapped signal until the foreground `docker run` returns, so
+# cleanup never fires while the container could still prune worktrees.
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 maybe_offer_worktree_locks "$worktree_lock_repo" "$container_name"
 HOST_TZ="$(host_timezone)"
 container_argv=(
