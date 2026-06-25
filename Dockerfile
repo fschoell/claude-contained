@@ -2,9 +2,11 @@
 FROM node:24-bookworm-slim
 
 # ---- JBR pins ---------------------------------------------------------------
+# Use the jbrsdk flavor (full JDK) so developer tools like javac/javap/jar are
+# available; the plain "jbr" flavor is runtime-only and omits them.
 ARG JBR_VERSION=25.0.1
 ARG JBR_BUILD=b268.52
-ARG JBR_FLAVOR=jbr
+ARG JBR_FLAVOR=jbrsdk
 ARG JBR_BASE_URL=https://cache-redirector.jetbrains.com/intellij-jbr
 
 # ---- HotswapAgent pin (Maven Central) ---------------------------------------
