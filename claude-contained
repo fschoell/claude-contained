@@ -18,7 +18,7 @@ Options:
   -S, --ssh          Enable SSH agent forwarding (for git push)
   -w, --worktree     Auto-include git worktree's main repository (skip prompt)
   -W, --lock-worktrees  Auto-lock hidden linked worktrees (skip prompt)
-  -y, --yolo         Skip all permission prompts (tool-specific flag)
+  -y, --yolo         Skip permission prompts (Claude: auto mode; others: yolo flag)
   -N, --contained-node-modules  Use container-specific node_modules (skip prompt)
   --share-skills=DIR  Mount shared skill folders from DIR (opt-in)
   --github-token-env NAME  Read host env var NAME and forward it as GH_TOKEN
@@ -98,7 +98,7 @@ build_attach_cmd() {
   attach_cmd=("$(get_tool_path "$tool")")
   if [[ $yolo_mode -eq 1 ]]; then
     case "$tool" in
-      claude) attach_cmd+=(--dangerously-skip-permissions) ;;
+      claude) attach_cmd+=(--permission-mode auto) ;;
       codex|copilot|gemini) attach_cmd+=(--yolo) ;;
       vibe) echo "Warning: vibe does not support yolo mode" >&2 ;;
     esac
@@ -1025,7 +1025,9 @@ container_argv+=( --mount "type=bind,src=${HOST_CLAUDE_CONTAINED},dst=${HOST_CLA
 case "$tool" in
   claude)
     tool_argv=(claude)
-    [[ $yolo_mode -eq 1 ]] && tool_argv+=(--dangerously-skip-permissions)
+    # -y maps Claude to auto mode (autonomous, but each action is vetted by the
+    # server-side safety classifier) rather than --dangerously-skip-permissions.
+    [[ $yolo_mode -eq 1 ]] && tool_argv+=(--permission-mode auto)
     ;;
   codex)
     tool_argv=(codex)
