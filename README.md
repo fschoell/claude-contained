@@ -67,7 +67,7 @@ claude-contained [options] [main_dir] [extra_dir ...] [-- <tool args...>]
 | `-s`, `--shell` | Start a bash shell instead of the AI tool (for debugging) |
 | `-S`, `--ssh` | Enable SSH agent forwarding (for git push) |
 | `-w`, `--worktree` | Auto-include git worktree's main repository (skip prompt) |
-| `-y`, `--yolo` | Skip all permission prompts (tool-specific flag) |
+| `-y`, `--yolo` | Skip permission prompts (Claude: auto mode; other tools: their yolo flag) |
 | `-N`, `--contained-node-modules` | Use container-specific node_modules (skip prompt) |
 | `--share-skills=DIR` | Mount shared skill folders from `DIR` (opt-in, no default; use a full path) |
 | `-a`, `--attach [NAME]` | Attach to running container (runs tool, or bash with `-s`) |
@@ -77,7 +77,7 @@ claude-contained [options] [main_dir] [extra_dir ...] [-- <tool args...>]
 
 | Tool | Command | Yolo Flag | Config Dir |
 |------|---------|-----------|------------|
-| [Claude Code](https://claude.ai/code) | `claude` | `--dangerously-skip-permissions` | `~/.claude` |
+| [Claude Code](https://claude.ai/code) | `claude` | `--permission-mode auto` | `~/.claude` |
 | [OpenAI Codex](https://github.com/openai/codex) | `codex` | `--yolo` | `~/.codex` |
 | [Google Gemini CLI](https://github.com/google-gemini/gemini-cli) | `gemini` | `--yolo` | `~/.gemini` |
 | [Mistral Vibe](https://github.com/mistralai/mistral-vibe) | `vibe` | `--auto-approve` | `~/.vibe` |
