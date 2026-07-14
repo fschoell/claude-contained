@@ -65,6 +65,23 @@ RUN set -eux; \
 ENV JAVA_HOME=/opt/jbr
 ENV PATH="$JAVA_HOME/bin:$PATH"
 
+# ---- Install GitHub CLI (gh) ------------------------------------------------
+ARG GH_VERSION=2.96.0
+RUN set -eux; \
+    ARCH="$(dpkg --print-architecture)"; \
+    case "$ARCH" in \
+      arm64)  GH_ARCH="arm64" ;; \
+      amd64)  GH_ARCH="amd64" ;; \
+      *)      echo "Unsupported architecture: $ARCH"; exit 1 ;; \
+    esac; \
+    URL="https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${GH_ARCH}.tar.gz"; \
+    echo "Downloading: $URL"; \
+    curl -fL "$URL" -o /tmp/gh.tar.gz; \
+    tar -xzf /tmp/gh.tar.gz -C /tmp; \
+    mv "/tmp/gh_${GH_VERSION}_linux_${GH_ARCH}/bin/gh" /usr/local/bin/gh; \
+    rm -rf /tmp/gh.tar.gz "/tmp/gh_${GH_VERSION}_linux_${GH_ARCH}"; \
+    gh --version
+
 # ---- Install HotswapAgent ---------------------------------------------------
 RUN set -eux; \
     mkdir -p /opt/jbr/lib/hotswap; \

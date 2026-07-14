@@ -42,7 +42,7 @@ claude-contained -N .
 
 - **claude-docked** - Docker equivalent of claude-contained. **Must be kept in sync with claude-contained** to maintain feature parity. Both scripts share the same flag interface and behavior.
 
-- **Dockerfile** - Builds on Node 20 (Debian Bookworm). Installs JetBrains Runtime 25, HotswapAgent, AI CLI tools (Claude Code, OpenAI Codex, GitHub Copilot, Google Gemini CLI, Mistral Vibe), ripgrep, Python 3. Creates entrypoint.sh that configures `host.local` for host service access, matches host UID/GID, and sets up path parity.
+- **Dockerfile** - Builds on Node 20 (Debian Bookworm). Installs JetBrains Runtime 25, HotswapAgent, AI CLI tools (Claude Code, OpenAI Codex, GitHub Copilot, Google Gemini CLI, Mistral Vibe), GitHub CLI (`gh`, pinned binary from GitHub releases), ripgrep, Python 3. Creates entrypoint.sh that configures `host.local` for host service access, matches host UID/GID, and sets up path parity.
 
 - **.mcp.json** - MCP server configuration, notably enabling Figma Desktop MCP via `host.local:3845`.
 
@@ -54,6 +54,7 @@ claude-contained -N .
 - **State sharing**: Tool configs (`~/.claude`, `~/.codex`, `~/.copilot`, `~/.gemini`, `~/.vibe`), Maven cache (`~/.m2`), and Vaadin state (`~/.vaadin`) bind-mounted from host
 - **Shared skills**: `--share-skills=DIR` is opt-in and has no default. It requires a full path and mounts `DIR` as each tool's skills directory. Codex gets a nested mount for host `~/.codex/skills/.system` so built-ins remain visible while new installs write to `DIR`.
 - **SSH agent forwarding**: Disabled by default for security; enable with `-S/--ssh` flag (required for `git push` to SSH remotes)
+- **GitHub token forwarding**: `--github-token-env NAME` reads the host env var `NAME` and forwards its value into the container as `GH_TOKEN` (consumed by `gh` and by git-over-HTTPS). Lets a read-only token live under a differently-named host var (e.g. `GH_TOKEN_RO`) and surface as `GH_TOKEN` only inside the sandbox. Off unless the flag is given; an empty/unset source var warns and leaves `GH_TOKEN` unset. The token is passed via `-e` on the launcher command line (briefly visible to `ps` on the host).
 - Host services accessible via `host.local` hostname (resolved from container gateway IP)
 
 ### Notable Patterns
@@ -62,7 +63,7 @@ claude-contained -N .
 - Entrypoint dynamically adjusts UID/GID to match host user (handles conflicts)
 - Strict bash error handling with `set -euo pipefail`
 - `--` separator distinguishes directory arguments from tool arguments
-- `-t/--tool` flag selects which AI tool to run; `-y/--yolo` maps to tool-specific permission flags; `-N/--contained-node-modules` auto-accepts the node_modules overlay prompt
+- `-t/--tool` flag selects which AI tool to run; `-y/--yolo` maps to tool-specific permission flags; `-N/--contained-node-modules` auto-accepts the node_modules overlay prompt; `--github-token-env NAME` forwards host env var `NAME` into the container as `GH_TOKEN` (space-separated form only, no `=`)
 - Only Claude and Codex support `--add-dir` for extra directories; others just get mounts
 - **Container naming**: Both scripts use the `aic-` prefix for container names. Auto-generated names follow the pattern `aic-{folder}-{HHMM}` (e.g., `aic-my-app-1423`). If a container with that name already exists, a numeric suffix is appended (`aic-my-app-1423-2`, `-3`, etc.). Custom names via `-a` also use the `aic-` prefix.
 - **Script parity**: `claude-contained` and `claude-docked` should always be updated together when adding/changing flags or behavior to maintain feature parity across both container runtimes
