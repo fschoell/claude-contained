@@ -21,6 +21,8 @@ Options:
   -y, --yolo         Skip all permission prompts (tool-specific flag)
   -N, --contained-node-modules  Use container-specific node_modules (skip prompt)
   --share-skills=DIR  Mount shared skill folders from DIR (opt-in)
+  --github-token-env NAME  Read host env var NAME and forward it as GH_TOKEN
+                     inside the container (e.g. --github-token-env GH_TOKEN_RO)
   --readonly-extras  Mount all extra dirs read-only (suffix overrides per-path)
   -a, --attach [NAME]  Attach to running container (runs tool, or bash with -s)
   -h, --help         Show this help message
@@ -57,6 +59,7 @@ Examples:
   claude-contained -p 8080:8080 .      # Expose port 8080
   claude-contained -H 3845 .           # Forward host:3845 to container localhost:3845
   claude-contained --share-skills=/Users/me/Projects/skills .
+  claude-contained --github-token-env GH_TOKEN_RO .  # Forward $GH_TOKEN_RO as GH_TOKEN
   claude-contained -a                  # List and attach to running container
   claude-contained -a myproject        # Attach or create named container
 EOF
@@ -217,6 +220,7 @@ rebuild_mode="none"
 tool="claude"
 ro_default=0
 share_skills_dir=""
+github_token_env=""
 port_maps=()
 host_forwards=()
 while [[ "${1:-}" == -* ]]; do
@@ -237,6 +241,15 @@ while [[ "${1:-}" == -* ]]; do
       share_skills_dir="${1#*=}"
       if [[ -z "$share_skills_dir" ]]; then
         echo "error: --share-skills requires a non-empty directory" >&2
+        exit 2
+      fi
+      shift
+      ;;
+    --github-token-env)
+      shift
+      github_token_env="${1:-}"
+      if [[ -z "$github_token_env" ]]; then
+        echo "error: --github-token-env requires an env var name" >&2
         exit 2
       fi
       shift
@@ -886,6 +899,19 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
 maybe_offer_worktree_locks "$worktree_lock_repo" "$container_name"
+
+# Resolve --github-token-env: read the named host env var and forward its value
+# into the container as GH_TOKEN (consumed by gh and by git-over-HTTPS). Lets a
+# read-only token live under a differently-named host var (e.g. GH_TOKEN_RO) and
+# surface as GH_TOKEN only inside the sandbox.
+gh_token_value=""
+if [[ -n "$github_token_env" ]]; then
+  gh_token_value="${!github_token_env:-}"
+  if [[ -z "$gh_token_value" ]]; then
+    echo "Warning: --github-token-env '${github_token_env}' is empty or unset on host; GH_TOKEN not set" >&2
+  fi
+fi
+
 HOST_TZ="$(host_timezone)"
 container_argv=(
   container run --rm -it
@@ -896,7 +922,7 @@ container_argv=(
   -e "HOST_GID=$(id -g)"
   -w "${main_host}"
   ${HOST_TZ:+-e "TZ=${HOST_TZ}"}
-  ${AI_GH_TOKEN:+-e "GH_TOKEN=${AI_GH_TOKEN}"}
+  ${gh_token_value:+-e "GH_TOKEN=${gh_token_value}"}
   --mount "type=bind,src=${HOST_CLAUDE_DIR},dst=${HOST_HOME}/.claude"
   --mount "type=bind,src=${HOST_CODEX_DIR},dst=${HOST_HOME}/.codex"
   --mount "type=bind,src=${HOST_COPILOT_DIR},dst=${HOST_HOME}/.copilot"
