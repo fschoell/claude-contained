@@ -1,35 +1,19 @@
-# Claude Code + JetBrains Runtime (JBR) + HotswapAgent (always on) + Python
+# Claude Contained — base image
+# Carries the AI coding agents + common runtime + entrypoint. Language toolchains
+# live in flavor images (docker/<flavor>/Dockerfile) that build FROM this base.
 FROM node:24-bookworm-slim
 
-# ---- JBR pins ---------------------------------------------------------------
-# Use the jbrsdk flavor (full JDK) so developer tools like javac/javap/jar are
-# available; the plain "jbr" flavor is runtime-only and omits them.
-ARG JBR_VERSION=25.0.1
-ARG JBR_BUILD=b268.52
-ARG JBR_FLAVOR=jbrsdk
-ARG JBR_BASE_URL=https://cache-redirector.jetbrains.com/intellij-jbr
-
-# ---- HotswapAgent pin (Maven Central) ---------------------------------------
-ARG HOTSWAP_AGENT_VERSION=2.0.3
-
-# ---- Eclipse JDT Language Server pin ----------------------------------------
-ARG JDTLS_VERSION=1.40.0
-ARG JDTLS_TIMESTAMP=202409261450
-
 # ---- System packages + custom packages (single apt-get update) -------------
-# Use glob trick: Dockerfile always exists, custom-packages.txt is optional
-COPY Dockerfile custom-packages.tx[t] /tmp/
+# Use glob trick: docker/base/Dockerfile always exists, custom-packages.txt is
+# optional. Build context is the repo root.
+COPY docker/base/Dockerfile custom-packages.tx[t] /tmp/
 RUN set -eux; \
-    # Base packages
+    # Base packages (lean: no language toolchains, no browser stack)
     BASE_PACKAGES=" \
       git openssh-client ca-certificates ripgrep jq \
-      curl bash xz-utils unzip tzdata \
+      curl bash xz-utils unzip zip tzdata \
       python3 python3-pip python3-venv \
-      iproute2 gosu socat \
-      libasound2 libatk-bridge2.0-0 libatk1.0-0 libatspi2.0-0 \
-      libcups2 libdbus-1-3 libdrm2 libgbm1 libgtk-3-0 \
-      libnspr4 libnss3 libpango-1.0-0 libxcomposite1 libxdamage1 \
-      libxfixes3 libxkbcommon0 libxrandr2 libxtst6 xvfb zip unzip bubblewrap"; \
+      iproute2 gosu socat bubblewrap"; \
     \
     # Extract custom packages (non-comment, non-empty lines)
     CUSTOM_PACKAGES=""; \
@@ -44,26 +28,6 @@ RUN set -eux; \
       $BASE_PACKAGES \
       $CUSTOM_PACKAGES \
     && rm -rf /var/lib/apt/lists/*
-
-# ---- Install JetBrains Runtime ----------------------------------------------
-RUN set -eux; \
-    ARCH="$(dpkg --print-architecture)"; \
-    case "$ARCH" in \
-      arm64)  JBR_ARCH="aarch64" ;; \
-      amd64)  JBR_ARCH="x64" ;; \
-      *)      echo "Unsupported architecture: $ARCH"; exit 1 ;; \
-    esac; \
-    FILE="${JBR_FLAVOR}-${JBR_VERSION}-linux-${JBR_ARCH}-${JBR_BUILD}.tar.gz"; \
-    URL="${JBR_BASE_URL}/${FILE}"; \
-    echo "Downloading: $URL"; \
-    mkdir -p /opt/jbr; \
-    curl -fL "$URL" -o /tmp/jbr.tar.gz; \
-    tar -xzf /tmp/jbr.tar.gz -C /opt/jbr --strip-components=1; \
-    rm -f /tmp/jbr.tar.gz; \
-    /opt/jbr/bin/java -version
-
-ENV JAVA_HOME=/opt/jbr
-ENV PATH="$JAVA_HOME/bin:$PATH"
 
 # ---- Install GitHub CLI (gh) ------------------------------------------------
 ARG GH_VERSION=2.96.0
@@ -82,80 +46,9 @@ RUN set -eux; \
     rm -rf /tmp/gh.tar.gz "/tmp/gh_${GH_VERSION}_linux_${GH_ARCH}"; \
     gh --version
 
-# ---- Install HotswapAgent ---------------------------------------------------
-RUN set -eux; \
-    mkdir -p /opt/jbr/lib/hotswap; \
-    curl -fL \
-      "https://repo1.maven.org/maven2/org/hotswapagent/hotswap-agent/${HOTSWAP_AGENT_VERSION}/hotswap-agent-${HOTSWAP_AGENT_VERSION}.jar" \
-      -o /opt/jbr/lib/hotswap/hotswap-agent.jar
-
-# ---- HotswapAgent global configuration --------------------------------------
-RUN cat <<'EOF' > /opt/jbr/lib/hotswap/hotswap-agent.properties
-# Auto-swap classes without requiring debug mode
-autoHotswap=true
-
-# Watch for class changes in common locations
-extraClasspath=target/classes
-
-# Disable plugins that add overhead (keep Spring, Vaadin, Proxy, AnonymousClassPatch)
-disabledPlugins=Hibernate,Logback,Log4j2,Weld,Deltaspike,WebObjects,WildFlyELResolver,MyFaces,OmniFaces,Mojarra,Resteasy,Jersey
-
-# Vaadin specific: reduce browser refresh delay
-vaadin.liveReloadQuietTime=500
-EOF
-
-# HotSwap always on (JBR 17/21/25) - requires G1 or Serial GC
-# --add-opens flags enable deep reflection for HotswapAgent class redefinition
-ENV JAVA_TOOL_OPTIONS="\
-  -XX:+UseG1GC \
-  -XX:+AllowEnhancedClassRedefinition \
-  -XX:+ClassUnloading \
-  -XX:HotswapAgent=fatjar \
-  --add-opens=java.base/java.lang=ALL-UNNAMED \
-  --add-opens=java.base/java.lang.reflect=ALL-UNNAMED \
-  --add-opens=java.base/java.io=ALL-UNNAMED \
-  --add-opens=java.base/sun.nio.ch=ALL-UNNAMED \
-  --add-opens=java.base/sun.security.action=ALL-UNNAMED \
-  --add-opens=java.base/jdk.internal.loader=ALL-UNNAMED \
-  --add-opens=java.desktop/java.beans=ALL-UNNAMED \
-  --add-opens=java.desktop/com.sun.beans=ALL-UNNAMED \
-  --add-opens=java.desktop/com.sun.beans.introspect=ALL-UNNAMED \
-  --add-opens=java.desktop/com.sun.beans.util=ALL-UNNAMED \
-  -Dvaadin.productionMode=false \
-  -Dspring.devtools.restart.enabled=false"
-
-# ---- Eclipse JDT Language Server (jdtls) ------------------------------------
-RUN set -eux; \
-    mkdir -p /opt/jdtls; \
-    curl -fL \
-      "https://download.eclipse.org/jdtls/milestones/${JDTLS_VERSION}/jdt-language-server-${JDTLS_VERSION}-${JDTLS_TIMESTAMP}.tar.gz" \
-      -o /tmp/jdtls.tar.gz; \
-    tar -xzf /tmp/jdtls.tar.gz -C /opt/jdtls; \
-    rm -f /tmp/jdtls.tar.gz; \
-    ln -s /opt/jdtls/bin/jdtls /usr/local/bin/jdtls
-
-# ---- Install Bun ------------------------------------------------------------
-ARG BUN_VERSION=latest
-RUN set -eux; \
-    ARCH="$(dpkg --print-architecture)"; \
-    case "$ARCH" in \
-      arm64)  BUN_ARCH="aarch64" ;; \
-      amd64)  BUN_ARCH="x64" ;; \
-      *)      echo "Unsupported architecture: $ARCH"; exit 1 ;; \
-    esac; \
-    if [ "$BUN_VERSION" = "latest" ]; then \
-      BUN_VERSION=$(curl -fsSL https://api.github.com/repos/oven-sh/bun/releases/latest | grep -oP '"tag_name": "bun-v\K[^"]+'); \
-    fi; \
-    echo "Installing Bun v${BUN_VERSION}"; \
-    URL="https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/bun-linux-${BUN_ARCH}.zip"; \
-    curl -fL "$URL" -o /tmp/bun.zip; \
-    unzip -q /tmp/bun.zip -d /tmp; \
-    mv /tmp/bun-linux-${BUN_ARCH}/bun /usr/local/bin/bun; \
-    chmod +x /usr/local/bin/bun; \
-    rm -rf /tmp/bun.zip /tmp/bun-linux-${BUN_ARCH}; \
-    bun --version
-
-# ---- Language Servers + AI CLIs --------------------------------------------
+# ---- AI CLIs (npm) ----------------------------------------------------------
+# Language servers that are tool-specific (typescript-language-server) live in
+# their flavor; pyright is kept here for now as general Python tooling.
 ARG AI_TOOLS_CACHE_BUST=stable
 RUN set -eux; \
     echo "Refreshing AI tool layers: ${AI_TOOLS_CACHE_BUST}" >/dev/null; \
@@ -163,8 +56,6 @@ RUN set -eux; \
     @github/copilot \
     @google/gemini-cli \
     @openai/codex \
-    typescript \
-    typescript-language-server \
     pyright \
   && npm cache clean --force
 
@@ -195,46 +86,10 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
   && /root/.local/bin/uv tool install mistral-vibe --python 3.12 \
   && chmod -R a+rX /opt/uv-tools /opt/uv-python
 
-# ---- Playwright browser (build-time install for reliability) ----------------
-# Install Chromium to a fixed location instead of user cache for container use
-ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-RUN npx playwright@1.61.0 install --with-deps chromium chromium-headless-shell
-
-# ---- Chrome wrapper for Playwright MCP compatibility ------------------------
-# When projects use @playwright/mcp without --browser flag, it looks for Chrome.
-# This wrapper redirects to our installed Playwright Chromium.
-RUN mkdir -p /opt/google/chrome && cat <<'EOF' > /opt/google/chrome/chrome
-#!/bin/bash
-exec /ms-playwright/chromium-*/chrome-linux/chrome --no-sandbox "$@"
-EOF
-RUN chmod +x /opt/google/chrome/chrome
-
 # ---- Non-root user ----------------------------------------------------------
 RUN useradd -m -s /bin/bash dev \
   && mkdir -p /work \
-  && chown -R dev:dev /work /home/dev /ms-playwright
-
-# ---- Install SDKMAN! with Maven + JBang (as dev user) ----------------------
-USER dev
-RUN set -eux; \
-    curl -s "https://get.sdkman.io?rcupdate=false" | bash; \
-    echo 'source "/home/dev/.sdkman/bin/sdkman-init.sh"' >> /home/dev/.bashrc; \
-    bash -c 'source "/home/dev/.sdkman/bin/sdkman-init.sh" && sdk install maven'; \
-    bash -c 'source "/home/dev/.sdkman/bin/sdkman-init.sh" && sdk install jbang'; \
-    bash -c 'source "/home/dev/.sdkman/bin/sdkman-init.sh" && mvn --version'; \
-    bash -c 'source "/home/dev/.sdkman/bin/sdkman-init.sh" && jbang version'; \
-    echo "SDKMAN! setup complete - Maven and JBang installed"
-USER root
-
-# ---- Symlink key binaries to /usr/local/bin ---------------------------------
-# Codex runs `bash -lc` which sources /etc/profile, clobbering inherited PATH.
-# Symlinks ensure JBR/Maven/JBang binaries are found via the default Debian PATH.
-RUN set -eux; \
-    for bin in /opt/jbr/bin/*; do \
-      ln -sf "$bin" "/usr/local/bin/$(basename "$bin")"; \
-    done; \
-    ln -sf /home/dev/.sdkman/candidates/maven/current/bin/mvn /usr/local/bin/mvn; \
-    ln -sf /home/dev/.sdkman/candidates/jbang/current/bin/jbang /usr/local/bin/jbang
+  && chown -R dev:dev /work /home/dev
 
 # ---- Claude Code clipboard workaround --------------------------------------
 # Force the classic inline TUI renderer ("tui": "default") inside the container.
@@ -248,17 +103,17 @@ RUN set -eux; \
 # This is a managed-settings file (highest precedence, Linux path), so it is
 # container-scoped and never touches the host-mounted ~/.claude/settings.json.
 # Remove this once the upstream renderer regression is fixed.
-RUN mkdir -p /etc/claude-code \
+RUN mkdir -p /etc/claude-code /etc/claude-contained/entrypoint.d \
     && printf '%s\n' '{ "tui": "default" }' > /etc/claude-code/managed-settings.json
 
-# ---- Entrypoint (host.local setup + path parity) ---------------------------
+# ---- Entrypoint (host.local setup + path parity + flavor hooks) ------------
 RUN cat <<'EOF' > /usr/local/bin/entrypoint.sh
 #!/bin/bash
 set -e
 
-# JBR as primary Java (with HotswapAgent support)
-export JAVA_HOME=/opt/jbr
-export PATH="/opt/claude:/home/dev/.sdkman/candidates/maven/current/bin:/home/dev/.sdkman/candidates/jbang/current/bin:$JAVA_HOME/bin:$PATH"
+# Claude binary first on PATH; language toolchains add themselves via flavor
+# image ENV / /usr/local/bin symlinks (both already on the default PATH).
+export PATH="/opt/claude:$PATH"
 
 # Add host.local pointing to host machine
 # Docker Desktop (macOS/Windows): use host.docker.internal
@@ -309,7 +164,6 @@ if [ -n "${HOST_HOME:-}" ]; then
 
   chown dev:dev "${HOST_HOME}" 2>/dev/null || true
   chown -R dev:dev "${HOST_HOME}/.claude" 2>/dev/null || true
-  chown -R dev:dev /ms-playwright 2>/dev/null || true
 
   export HOME="${HOST_HOME}"
 
@@ -358,26 +212,23 @@ if [ -n "${GIT_PROTECT_DIRS:-}" ]; then
     fi
   done
 fi
-# Start virtual framebuffer so Chrome/Chromium can run without a real display
-if [ -z "${DISPLAY:-}" ]; then
-  export DISPLAY=:99
-  Xvfb :99 -screen 0 1280x1024x24 -nolisten tcp &
-fi
 
-# Start virtual framebuffer so Chrome/Chromium can run without a real display
-if [ -z "${DISPLAY:-}" ]; then
-  export DISPLAY=:99
-  Xvfb :99 -screen 0 1280x1024x24 -nolisten tcp &
+# Flavor runtime hooks: each flavor image may drop scripts into
+# /etc/claude-contained/entrypoint.d/ (e.g. Go/Rust cache setup, web Xvfb).
+# They run as root with HOME/HOST_HOME set; vars they export are inherited by
+# the gosu exec below (which does not use `env -i`).
+if [ -d /etc/claude-contained/entrypoint.d ]; then
+  for _hook in /etc/claude-contained/entrypoint.d/*.sh; do
+    [ -r "$_hook" ] && . "$_hook"
+  done
 fi
 
 # Drop to dev user (or stay root if STAY_ROOT=1)
 if [ "$(id -u)" = "0" ] && [ "${STAY_ROOT:-}" != "1" ]; then
   USER_HOME="${HOME:-/home/dev}"
   exec gosu dev env \
-    JAVA_HOME="$JAVA_HOME" \
     PATH="${USER_HOME}/.local/bin:$PATH" \
     HOME="$USER_HOME" \
-    DISPLAY="$DISPLAY" \
     "$@"
 else
   # Also update PATH for root/non-gosu case

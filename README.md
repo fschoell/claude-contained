@@ -10,15 +10,17 @@ There are some caveats:
 - **Host localhost access**: `-H PORT` works with `claude-docked` (Docker) but not `claude-contained` (Apple Containers) for services bound to localhost. See [Accessing Host Services](#accessing-host-services). (Apple Containers seems to be gaining support soon.)
 - **`~/.claude.json` is relocated**: On first run, your `~/.claude.json` is moved to `~/.claude-contained/.claude.json` and replaced with a symlink. This allows containers to share the file. **If you delete `~/.claude-contained/`, you will lose your Claude credentials and some settings.** You'll have to log in again. This is a limitation on how files can be shared with the container. 
 - **Don't mix contained and uncontained at the same time**: Running `claude-contained` and regular `claude` simultaneously may cause issues, as both access the same config file but through different paths. Run one or the other, not both at once. This will be fixed in the future.
-- **Codex and PATH**: Codex runs commands via `bash -lc`, which sources `/etc/profile` and resets PATH to the Debian default. This means tools installed outside standard locations (e.g., via SDKMAN) won't be found unless symlinked into `/usr/local/bin/`. The image includes symlinks for `java`, `javac`, `jar`, `mvn`, and `jbang`. If you install additional tools in non-standard paths, add similar symlinks in the Dockerfile.
+- **Codex and PATH**: Codex runs commands via `bash -lc`, which sources `/etc/profile` and resets PATH to the Debian default. This means tools installed outside standard locations (e.g., via SDKMAN) won't be found unless symlinked into `/usr/local/bin/`. The `java` flavor includes symlinks for `java`, `javac`, `jar`, `mvn`, and `jbang`. If you install additional tools in non-standard paths, add similar symlinks in the relevant `docker/<flavor>/Dockerfile`.
 
 ## Quick Start
 
 ### Apple Containers (macOS)
 
-1. Build the container:
+1. Build the base image (agents only) and any language flavors you want:
    ```bash
-   container build --platform linux/arm64 -t claude-contained .
+   claude-contained --build           # lean base (the default image)
+   claude-contained -f go --build     # base + the go flavor
+   claude-contained -f java --build   # base + the java flavor
    ```
 
 2. Put `claude-contained` somewhere on your PATH, optionally aliasing to `claude`.
@@ -37,9 +39,10 @@ There are some caveats:
 
 ### Docker
 
-1. Build the container:
+1. Build the base image and any language flavors you want:
    ```bash
-   docker build --platform linux/arm64 -t claude-contained .
+   claude-docked --build            # lean base
+   claude-docked -f go --build      # base + the go flavor
    ```
 
 2. Put `claude-docked` somewhere on your PATH.
@@ -61,7 +64,8 @@ claude-contained [options] [main_dir] [extra_dir ...] [-- <tool args...>]
 | Flag | Description |
 |------|-------------|
 | `-t`, `--tool TOOL` | AI tool to run: `claude` (default), `codex`, `gemini`, `vibe` |
-| `-R`, `--rebuild[=MODE]` | Rebuild image before run: `tools` (default) or `full` |
+| `-f`, `--flavor NAME` | Language flavor image: `go`, `java`, `rust`, `web` (default: lean base) |
+| `--build[=MODE]` | Build base + selected flavor image, then exit: cached (default), `tools`, or `full` |
 | `-H PORT[:HOSTPORT]` | Forward host port to container localhost (can be repeated) |
 | `-p HOST:CONTAINER` | Publish container port to host (can be repeated) |
 | `-s`, `--shell` | Start a bash shell instead of the AI tool (for debugging) |
@@ -110,8 +114,8 @@ claude-contained . ../lib:ro                        # Mount ../lib read-only
 claude-contained --readonly-extras . ../a ../b      # All extras read-only
 claude-contained . -- --model sonnet --verbose      # Pass args to tool
 claude-contained -y -t codex .                      # Codex with --yolo
-claude-contained --rebuild .                        # Refresh AI tools first
-claude-contained --rebuild=full .                   # Full fresh rebuild first
+claude-contained --build                            # Build the base image, then exit
+claude-contained -f go --build                      # Build base + go flavor, then exit
 claude-contained -s                                 # Debug shell
 claude-contained --share-skills=/Users/me/Projects/skills . # Share skills into tool skill dirs
 
@@ -120,20 +124,48 @@ claude-contained -p 8080:8080 .                     # Expose port 8080
 claude-contained -H 3845 .                          # Forward host:3845 to container
 ```
 
-## Rebuilding the Image
+## Images and Flavors
 
-Use the launcher when you want the image refreshed before starting a new session:
+`claude-contained` runs on a **lean base image** (`claude-contained-base`) that carries only the AI agents and common runtime. Language-specific **flavor images** build `FROM` the base and add one toolchain each:
+
+| Flavor | Adds |
+|--------|------|
+| _(none / base)_ | AI agents, `gh`, ripgrep, Python 3 — no language toolchain |
+| `go` | Go toolchain + C toolchain for cgo (`build-essential`, `pkg-config`), `golangci-lint`, `gopls`, `dlv` (caches repointed under `$HOME`) |
+| `java` | JetBrains Runtime + HotswapAgent + JDTLS + Maven + JBang |
+| `rust` | rustup + cargo (stable) |
+| `web` | Playwright/Chromium (+ Xvfb), Bun, TypeScript language server |
+
+Select one at run time with `--flavor`:
 
 ```bash
-claude-contained --rebuild .      # Refresh AI CLI layers
-claude-contained --rebuild=full . # Full fresh rebuild (--pull --no-cache)
-claude-docked --rebuild .
-claude-docked --rebuild=full .
+claude-contained --flavor go .
+claude-docked --flavor web .
 ```
 
-`tools` rebuilds the AI CLI portion of the image and everything after it, which updates Claude Code, Codex, Gemini, Vibe, and Copilot without invalidating the entire build. If that targeted rebuild fails, the launcher automatically retries with a full rebuild.
+Images are **local build artifacts** (there is no registry). Build them with `--build`, which always builds the base first, then the selected flavor:
 
-`full` forces a clean rebuild of the entire image and pulls the latest base image. Rebuild requires the launcher script to run from this repo checkout, or via a symlink into it, so it can find the local `Dockerfile`.
+```bash
+claude-contained --build                 # base only
+claude-contained -f go --build           # base + go
+claude-contained -f rust --build         # base + rust
+claude-contained -f go --build=full      # clean rebuild (--pull --no-cache)
+claude-contained --build-all             # base + every flavor
+```
+
+Use `--build-all[=MODE]` to build the base and every flavor in one go. If you launch a flavor whose image isn't built yet, the launcher offers to build it.
+
+### Build modes
+
+`--build` takes an optional mode:
+
+- **(omitted)** — cached build; fast, only rebuilds changed layers. Use for a first build or to pick up Dockerfile changes.
+- **`--build=tools`** — refresh the AI CLI layer in the base (Claude Code, Codex, Gemini, Vibe, Copilot) even when cached; if it fails, the launcher retries with `full`.
+- **`--build=full`** — `--pull --no-cache` clean rebuild.
+
+`--build` requires the launcher to run from this repo checkout (or a symlink into it) so it can find `docker/<flavor>/Dockerfile`.
+
+> **Migration note:** the default image used to be a Java/Vaadin-heavy build. It is now the lean base — **Java users should run `--flavor java`** (which reproduces the old stack). There is no longer a root `Dockerfile` or `--rebuild` flag; use `--build`.
 
 ## Node.js Projects (node_modules Overlay)
 
@@ -245,9 +277,9 @@ Use the claude-contained image as a VS Code devcontainer for Java/Spring/Vaadin 
 
 ### Setup
 
-1. Build the Docker image first:
+1. Build the java flavor image first (the devcontainer uses `claude-contained-java`):
    ```bash
-   docker build -t claude-contained .
+   claude-docked -f java --build
    ```
 
 2. Copy the template to your project:

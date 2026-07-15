@@ -13,9 +13,9 @@ This template enables VS Code devcontainer workflow with the claude-contained im
 
 ## Prerequisites
 
-1. **Build the claude-contained image first:**
+1. **Build the java flavor image first** (this devcontainer uses `claude-contained-java`):
    ```bash
-   docker build -t claude-contained .
+   claude-docked -f java --build
    ```
 
 2. **VS Code with Dev Containers extension installed**
@@ -74,7 +74,7 @@ The template forwards ports 8080 (web app) and 5005 (debug). Modify as needed:
 
 ### Using a Different Java Version
 
-The image includes JetBrains Runtime 25. To use a different JDK, you would need to modify the Dockerfile and rebuild the image.
+The image includes JetBrains Runtime 25. To use a different JDK, you would need to modify `docker/java/Dockerfile` and rebuild the image.
 
 ## Limitations
 

@@ -9,11 +9,18 @@ Claude Code Contained is a bash-based containerization wrapper that runs AI codi
 ## Build and Run Commands
 
 ```bash
-# Build the container image
-container build -t claude-contained .
+# Build images via the launcher (base is always built first, then the flavor).
+claude-contained --build            # base only (lean, default image)
+claude-contained -f go --build      # base + go flavor
+claude-contained --build-all        # base + every flavor
+# claude-docked -f go --build       # same, Docker runtime
 
-# Run Claude (default)
+# Run Claude on the lean base image (default; agents only, no language toolchain)
 claude-contained
+
+# Run in a language flavor image (go, java, rust, web)
+claude-contained --flavor go .
+claude-contained --flavor java .
 
 # Run other tools
 claude-contained -t codex .
@@ -27,7 +34,7 @@ claude-contained . ../other/project
 # Pass arguments to tool (use -- separator)
 claude-contained . -- --model sonnet
 
-# Yolo mode (maps to tool-specific flag)
+# Yolo mode (Claude: auto permission mode; others: their yolo flag)
 claude-contained -y -t codex .
 
 # Use container-specific node_modules (skip prompt)
@@ -42,12 +49,17 @@ claude-contained -N .
 
 - **claude-docked** - Docker equivalent of claude-contained. **Must be kept in sync with claude-contained** to maintain feature parity. Both scripts share the same flag interface and behavior.
 
-- **Dockerfile** - Builds on Node 20 (Debian Bookworm). Installs JetBrains Runtime 25, HotswapAgent, AI CLI tools (Claude Code, OpenAI Codex, GitHub Copilot, Google Gemini CLI, Mistral Vibe), GitHub CLI (`gh`, pinned binary from GitHub releases), ripgrep, Python 3. Creates entrypoint.sh that configures `host.local` for host service access, matches host UID/GID, and sets up path parity.
+- **docker/base/Dockerfile** - The lean base image (Node 24, Debian Bookworm). Installs the AI CLI tools (Claude Code, OpenAI Codex, GitHub Copilot, Google Gemini CLI, Mistral Vibe), GitHub CLI (`gh`), ripgrep, Python 3, and creates the entrypoint (`host.local` setup, host UID/GID match, path parity). No language toolchains. Flavor images build `FROM claude-contained-base`.
+
+- **docker/<flavor>/Dockerfile** - Flavor images that add one language toolchain each: `go` (Go + cgo C toolchain + golangci-lint + gopls + dlv), `java` (JetBrains Runtime + HotswapAgent + JDTLS + Maven + JBang), `rust`, `web` (Playwright/Chromium + Bun + TS language server). A flavor may drop a runtime hook into `docker/<flavor>/entrypoint.d/*.sh` (see Notable Patterns).
+
+- **Building images** - Each launcher builds its own images via `--build[=MODE]` (MODE: cached default, `tools`, `full`); it always builds the base first, then the flavor selected with `-f`. `--build-all[=MODE]` builds the base + every flavor. No standalone build script — the launcher knows its runtime (`container`/`docker`).
 
 - **.mcp.json** - MCP server configuration, notably enabling Figma Desktop MCP via `host.local:3845`.
 
 ### Container Design
 
+- **Flavored images**: A lean base image (`claude-contained-base`) carries the AI agents + common runtime + entrypoint. Language flavor images (`claude-contained-<flavor>` for `go`/`java`/`rust`/`web`) build `FROM` the base and add one toolchain each. `--flavor NAME` selects the image at run time; no flavor → base. Images are local build artifacts (no registry); a missing image prompts to build via `--build`.
 - **Full path parity**: Directories mounted at their original host paths (e.g., `/Users/me/project` → `/Users/me/project`)
 - **HOME parity**: Container HOME matches host HOME for consistent behavior
 - **UID/GID matching**: Container user matches host user IDs for proper file permissions
@@ -63,7 +75,8 @@ claude-contained -N .
 - Entrypoint dynamically adjusts UID/GID to match host user (handles conflicts)
 - Strict bash error handling with `set -euo pipefail`
 - `--` separator distinguishes directory arguments from tool arguments
-- `-t/--tool` flag selects which AI tool to run; `-y/--yolo` maps to tool-specific permission flags; `-N/--contained-node-modules` auto-accepts the node_modules overlay prompt; `--github-token-env NAME` forwards host env var `NAME` into the container as `GH_TOKEN` (space-separated form only, no `=`)
+- `-t/--tool` flag selects which AI tool to run; `-y/--yolo` maps to tool-specific permission flags (Claude → `--permission-mode auto`, others → their yolo flag); `-N/--contained-node-modules` auto-accepts the node_modules overlay prompt; `--github-token-env NAME` forwards host env var `NAME` into the container as `GH_TOKEN` (space-separated form only, no `=`); `--flavor NAME` selects the language image (`go`/`java`/`rust`/`web`; default lean base)
+- **Flavor entrypoint hooks**: the entrypoint lives once in the base image; flavors that need runtime setup drop scripts into `/etc/claude-contained/entrypoint.d/*.sh`, which the base entrypoint sources (as root, HOME set) before dropping to `dev`. Exported vars are inherited by the `gosu dev env … "$@"` exec (no `env -i`). Used by go/rust (cache repoint + chown) and web (Xvfb startup).
 - Only Claude and Codex support `--add-dir` for extra directories; others just get mounts
 - **Container naming**: Both scripts use the `aic-` prefix for container names. Auto-generated names follow the pattern `aic-{folder}-{HHMM}` (e.g., `aic-my-app-1423`). If a container with that name already exists, a numeric suffix is appended (`aic-my-app-1423-2`, `-3`, etc.). Custom names via `-a` also use the `aic-` prefix.
 - **Script parity**: `claude-contained` and `claude-docked` should always be updated together when adding/changing flags or behavior to maintain feature parity across both container runtimes
@@ -94,4 +107,5 @@ The `devcontainer/` directory provides a VS Code devcontainer configuration for 
 - Running `claude-contained` and regular `claude` simultaneously is not recommended (both access same config via different paths)
 - **node_modules overlay**: On macOS hosts, Node.js projects are prompted to create a `.claude-contained/node_modules-linux-<arch>/` directory that gets mounted over `node_modules` inside the container (since macOS native binaries don't work on Linux). You should manually add `.claude-contained/` to `.gitignore` if needed. Use `-N` to skip the prompt.
 - **Devcontainer limitation**: Don't run VS Code devcontainer and standalone scripts simultaneously on same `~/.claude` directory
-- **Claude Code clipboard / copy workaround**: The Dockerfile writes `/etc/claude-code/managed-settings.json` with `{ "tui": "default" }` to force Claude Code's classic inline renderer inside the container. The newer fullscreen ("no-flicker") renderer (default since ~2.1.168) routes copy-on-select only through OSC 52 and captures the mouse; in a containerized terminal there is no clipboard tool, OSC 52 is dropped (e.g. Terminal.app), and mouse capture breaks native shift/option-drag selection, so copying from Claude stops working (anthropics/claude-code#66192). Managed settings are container-scoped (highest precedence, Linux path) and never touch the host-mounted `~/.claude/settings.json`. Remove this RUN once the upstream renderer regression is fixed.
+- **Flavor migration**: The default image is now the lean base (`claude-contained-base`), not the old Java-heavy monolith. Java/Vaadin users must run `--flavor java` (which reproduces the old stack). Build images with `--build` (e.g. `claude-contained -f java --build`) before first use; the old `container/docker build -t claude-contained .` and `--rebuild` no longer apply (there is no root `Dockerfile`).
+- **Claude Code clipboard / copy workaround**: The base image writes `/etc/claude-code/managed-settings.json` with `{ "tui": "default" }` to force Claude Code's classic inline renderer inside the container. The newer fullscreen ("no-flicker") renderer (default since ~2.1.168) routes copy-on-select only through OSC 52 and captures the mouse; in a containerized terminal there is no clipboard tool, OSC 52 is dropped (e.g. Terminal.app), and mouse capture breaks native shift/option-drag selection, so copying from Claude stops working (anthropics/claude-code#66192). Managed settings are container-scoped (highest precedence, Linux path) and never touch the host-mounted `~/.claude/settings.json`. Remove this RUN once the upstream renderer regression is fixed.
