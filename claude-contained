@@ -11,7 +11,12 @@ Description:
 
 Options:
   -t, --tool TOOL    AI tool to run: claude (default), codex, copilot, gemini, vibe
-  -R, --rebuild[=MODE]  Rebuild image and exit: tools (default) or full
+  -f, --flavor NAME  Language flavor image: go, java, rust, web
+                     (default: lean base — agents only)
+  --build[=MODE]     Build base + selected flavor image, then exit.
+                     MODE: tools (refresh AI CLIs) or full (--pull --no-cache);
+                     omit for a cached build.
+  --build-all[=MODE]  Build the base + every flavor image, then exit (same MODEs).
   -H PORT[:HOSTPORT] Forward host port to container localhost (can be repeated)
   -p HOST:CONTAINER  Publish container port to host (can be repeated)
   -v, --volume VOL   Mount an extra volume (passed through as --volume; can be repeated)
@@ -48,6 +53,7 @@ Examples:
   claude-contained -t copilot .        # Run copilot instead
   claude-contained -t gemini .         # Run gemini instead
   claude-contained -t vibe .           # Run vibe instead
+  claude-contained --flavor go .       # Run in the Go flavor image
   claude-contained . ../other/project  # Mount extra directories
   claude-contained . ../lib:ro         # Mount ../lib read-only
   claude-contained --readonly-extras . ../a ../b  # All extras read-only
@@ -55,8 +61,8 @@ Examples:
   claude-contained -y -t codex .       # Codex with --yolo
   claude-contained -S .                # Enable SSH agent (for git push)
   claude-contained -s                  # Debug shell in current directory
-  claude-contained --rebuild           # Refresh AI tools, then exit
-  claude-contained --rebuild=full      # Full fresh rebuild, then exit
+  claude-contained -f go --build       # Build base + go flavor, then exit
+  claude-contained --build=full        # Full fresh rebuild of the base, then exit
   claude-contained -p 8080:8080 .      # Expose port 8080
   claude-contained -H 3845 .           # Forward host:3845 to container localhost:3845
   claude-contained --share-skills=/Users/me/Projects/skills .
@@ -153,53 +159,90 @@ host_timezone() {
   [[ "$link" == */zoneinfo/* ]] && echo "${link#*/zoneinfo/}"
 }
 
+# Locate the repo checkout (holding docker/<flavor>/Dockerfile)
 find_build_context() {
   local script_path script_dir repo_root
   script_path="$(resolve_path "$0")"
   script_dir="$(dirname "$script_path")"
-  if [[ -f "${script_dir}/Dockerfile" ]]; then
+  if [[ -f "${script_dir}/docker/base/Dockerfile" ]]; then
     echo "$script_dir"
     return 0
   fi
   repo_root="$(git -C "$script_dir" rev-parse --show-toplevel 2>/dev/null)" || true
-  if [[ -n "$repo_root" && -f "${repo_root}/Dockerfile" ]]; then
+  if [[ -n "$repo_root" && -f "${repo_root}/docker/base/Dockerfile" ]]; then
     echo "$repo_root"
     return 0
   fi
   return 1
 }
 
-run_rebuild() {
-  local mode="$1"
-  local build_context refresh_token
+# True if an image with the given repository name exists locally.
+image_exists() {
+  container image inspect "${1}:latest" >/dev/null 2>&1
+}
 
-  build_context="$(find_build_context)" || {
-    echo "Rebuild requires a repo-adjacent install with Dockerfile access." >&2
+# Build one image (base or a flavor) for this runtime. mode: cached|tools|full.
+# The empty-array guard keeps `set -u` happy on bash 3.2 (macOS system bash).
+build_image() {
+  local what="$1" mode="$2" repo_root="$3" tag dfile
+  local args=()
+  [[ "$mode" == "full" ]] && args+=(--pull --no-cache)
+  if [[ "$what" == "base" ]]; then
+    tag="claude-contained-base:latest"
+    dfile="docker/base/Dockerfile"
+    # `tools` mode busts only the base's AI-tool layer (agents live in base).
+    [[ "$mode" == "tools" ]] && args+=(--build-arg "AI_TOOLS_CACHE_BUST=$(date -u +%Y%m%d%H%M%S)")
+  else
+    tag="claude-contained-${what}:latest"
+    dfile="docker/${what}/Dockerfile"
+  fi
+  echo ">> building ${tag} (mode=${mode})" >&2
+  ( cd "$repo_root" && container build ${args[@]+"${args[@]}"} -t "$tag" -f "$dfile" . )
+}
+
+# Build the base + active flavor image(s). mode: cached|tools|full. Always
+# builds the base first (flavors build FROM it), with a tools->full retry.
+run_build() {
+  local mode="$1"
+  local repo_root
+
+  case "$mode" in
+    cached|tools|full) ;;
+    *)
+      echo "Unknown build mode: $mode" >&2
+      echo "Supported build modes: tools, full (or omit for a cached build)" >&2
+      exit 1
+      ;;
+  esac
+
+  repo_root="$(find_build_context)" || {
+    echo "Build requires a repo-adjacent install with docker/base/Dockerfile access." >&2
     echo "Place claude-contained in this repo checkout (or symlink to it) and retry." >&2
     exit 1
   }
 
-  case "$mode" in
-    tools)
-      refresh_token="$(date -u +%Y%m%d%H%M%S)"
-      echo "Rebuilding claude-contained image (AI tools refresh)..." >&2
-      if container build --build-arg "AI_TOOLS_CACHE_BUST=${refresh_token}" -t claude-contained:latest "$build_context"; then
-        return 0
-      fi
+  if ! build_image base "$mode" "$repo_root"; then
+    if [[ "$mode" == "tools" ]]; then
       echo "AI tools refresh failed. Retrying with full rebuild..." >&2
-      run_rebuild full
-      return
-      ;;
-    full)
-      echo "Rebuilding claude-contained image (full fresh rebuild)..." >&2
-      container build --pull --no-cache -t claude-contained:latest "$build_context"
-      ;;
-    *)
-      echo "Unknown rebuild mode: $mode" >&2
-      echo "Supported rebuild modes: tools, full" >&2
+      build_image base full "$repo_root" || exit 1
+      mode="full"
+    else
       exit 1
-      ;;
-  esac
+    fi
+  fi
+  if [[ $build_all -eq 1 ]]; then
+    # Build every flavor discovered under docker/<flavor>/ (base already done).
+    local d name
+    for d in "$repo_root"/docker/*/; do
+      [[ -d "$d" ]] || continue
+      name="$(basename "$d")"
+      [[ "$name" == "base" ]] && continue
+      [[ -f "${d}Dockerfile" ]] || continue
+      build_image "$name" "$mode" "$repo_root" || exit 1
+    done
+  elif [[ -n "$flavor" ]]; then
+    build_image "$flavor" "$mode" "$repo_root" || exit 1
+  fi
 }
 
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
@@ -217,8 +260,10 @@ contained_node_modules=0
 attach_mode=0
 attach_name=""
 custom_container_name=""
-rebuild_mode="none"
+build_mode="none"
+build_all=0
 tool="claude"
+flavor=""
 ro_default=0
 share_skills_dir=""
 github_token_env=""
@@ -256,22 +301,32 @@ while [[ "${1:-}" == -* ]]; do
       fi
       shift
       ;;
-    --rebuild)
-      rebuild_mode="tools"
+    -f|--flavor)
       shift
-      ;;
-    --rebuild=*)
-      rebuild_mode="${1#*=}"
-      shift
-      ;;
-    -R)
-      if [[ "${2:-}" == "tools" || "${2:-}" == "full" ]]; then
-        rebuild_mode="$2"
-        shift 2
-      else
-        rebuild_mode="tools"
-        shift
+      flavor="${1:-}"
+      if [[ -z "$flavor" ]]; then
+        echo "error: --flavor requires a name (go, java, rust, web)" >&2
+        exit 2
       fi
+      shift
+      ;;
+    --build)
+      build_mode="cached"
+      shift
+      ;;
+    --build=*)
+      build_mode="${1#*=}"
+      shift
+      ;;
+    --build-all)
+      build_mode="cached"
+      build_all=1
+      shift
+      ;;
+    --build-all=*)
+      build_mode="${1#*=}"
+      build_all=1
+      shift
       ;;
     -s|--shell)
       shell_mode=1
@@ -340,6 +395,20 @@ if [[ -n "$share_skills_dir" ]]; then
   share_skills_dir="$(resolve_path "$share_skills_dir")"
 fi
 
+# Resolve the flavor image tag (empty flavor -> lean base image). When the repo
+# is reachable, validate the flavor against its Dockerfile; otherwise defer to
+# the image-existence check just before the run.
+if [[ -n "$flavor" ]]; then
+  _flavor_ctx="$(find_build_context 2>/dev/null || true)"
+  if [[ -n "$_flavor_ctx" && ! -f "${_flavor_ctx}/docker/${flavor}/Dockerfile" ]]; then
+    echo "error: unknown flavor '$flavor' (no docker/${flavor}/Dockerfile)" >&2
+    exit 2
+  fi
+fi
+image_name="claude-contained-base"
+[[ -n "$flavor" ]] && image_name="claude-contained-${flavor}"
+image_ref="${image_name}:latest"
+
 # Ensure container system is running (skipped when sourced for tests)
 if [[ -z "${CLAUDE_CONTAINED_LIB_ONLY:-}" ]] && ! container system status &>/dev/null; then
   read -p "Container system is not running. Start it? [Y/n] " answer
@@ -349,9 +418,9 @@ if [[ -z "${CLAUDE_CONTAINED_LIB_ONLY:-}" ]] && ! container system status &>/dev
   esac
 fi
 
-# Handle rebuild mode (rebuild and exit)
-if [[ "$rebuild_mode" != "none" ]]; then
-  run_rebuild "$rebuild_mode"
+# Handle build mode (build image and exit)
+if [[ "$build_mode" != "none" ]]; then
+  run_build "$build_mode"
   exit 0
 fi
 
@@ -1120,11 +1189,26 @@ if [[ ${#tool_args[@]} -gt 0 ]]; then
   tool_argv+=( "${tool_args[@]}" )
 fi
 
+# Ensure the flavor image exists (images are local build artifacts, not pulled).
+if ! image_exists "$image_name"; then
+  echo "Image '${image_ref}' is not built." >&2
+  if find_build_context >/dev/null 2>&1; then
+    read -p "Build it now (base + ${flavor:-base})? [Y/n] " answer
+    case "${answer:-Y}" in
+      [Yy]* ) run_build cached ;;
+      * ) echo "Aborted. Build with: claude-contained ${flavor:+-f $flavor }--build" >&2; exit 1 ;;
+    esac
+  else
+    echo "Build it with: claude-contained ${flavor:+-f $flavor }--build" >&2
+    exit 1
+  fi
+fi
+
 # Run container
 if [[ $shell_mode -eq 1 ]]; then
-  "${container_argv[@]}" claude-contained:latest bash && container_exit=0 || container_exit=$?
+  "${container_argv[@]}" "$image_ref" bash && container_exit=0 || container_exit=$?
 else
-  "${container_argv[@]}" claude-contained:latest "${tool_argv[@]}" && container_exit=0 || container_exit=$?
+  "${container_argv[@]}" "$image_ref" "${tool_argv[@]}" && container_exit=0 || container_exit=$?
 fi
 
 check_for_updates

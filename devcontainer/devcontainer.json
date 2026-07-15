@@ -1,6 +1,6 @@
 {
   "name": "Claude Contained (Java/Spring)",
-  "image": "claude-contained:latest",
+  "image": "claude-contained-java:latest",
 
   // Path parity: disable default mount, use original paths
   "workspaceMount": "",
